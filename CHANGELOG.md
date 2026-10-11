@@ -6,6 +6,22 @@ Each pull request adds its line under **Unreleased**. When a version is cut, tha
 
 ## [Unreleased]
 
+## [0.1.2] - 2026-10-11
+
+Publishing and metadata only. No change to the broker, the agent or the wire protocol.
+
+### Added
+
+- Releases publish to crates.io from CI when a GitHub release is published, through trusted publishing: no crates.io token is stored anywhere. The workflow refuses a release whose tag, workspace version and changelog disagree.
+- `cargo semver-checks` runs on every pull request against the crates on crates.io.
+- crates.io and docs.rs badges, and `cargo install hatchling-runtime` as an install option in the quickstart.
+- CONTRIBUTING says when new code earns its own crate, and what each published crate costs.
+- `docs/releasing.md`: how a version is cut and published, the trusted-publishing settings, and a new crate's first publish. `scripts/publish-crates.sh` publishes in dependency order for both CI and the maintainer, skips crates already on crates.io at the version (so a failed run is simply re-run), and in CI skips and names crates new to crates.io.
+
+### Changed
+
+- Keywords and categories are per crate, each describing what that crate does: `hatchling-runtime` carries the headline terms, and every other crate its own (model providers, tool-calling, cron, signed skills, seccomp, FIDO2 and so on), so each reaches a different search and leads back to Hatchling.
+
 ## [0.1.1] - 2026-10-11
 
 The first release on crates.io. No change to the broker, the agent or the wire protocol.
@@ -41,6 +57,7 @@ The first public release. [Release notes](https://github.com/undergroundrap/hatc
 
 Published in [the trust boundary](docs/arch/trust-boundary.md#known-limitations), each with a work order and an issue.
 
-[Unreleased]: https://github.com/undergroundrap/hatchling/compare/v0.1.1...HEAD
+[Unreleased]: https://github.com/undergroundrap/hatchling/compare/v0.1.2...HEAD
+[0.1.2]: https://github.com/undergroundrap/hatchling/releases/tag/v0.1.2
 [0.1.1]: https://github.com/undergroundrap/hatchling/releases/tag/v0.1.1
 [0.1.0]: https://github.com/undergroundrap/hatchling/releases/tag/v0.1.0
