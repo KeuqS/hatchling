@@ -1,0 +1,105 @@
+name: gate
+
+on:
+  push:
+    branches: [main]
+    paths:
+      # Run on everything except pure docs/assets pushes (saves minutes),
+      # but always run when a machine-checked doc changes:
+      # crates/hatchling-core/tests/local_api_doc.rs reads
+      # docs/local-api.md, and hatchling-dev's arch check reads
+      # docs/dependency-review.md.
+      - '**'
+      - '!docs/**'
+      - '!**.md'
+      - '!assets/**'
+      - 'docs/local-api.md'
+      - 'docs/dependency-review.md'
+  pull_request:
+    paths:
+      - '**'
+      - '!docs/**'
+      - '!**.md'
+      - '!assets/**'
+      - 'docs/local-api.md'
+      - 'docs/dependency-review.md'
+
+# Read-only: the gate needs nothing more, and pull requests from forks run it.
+permissions:
+  contents: read
+
+jobs:
+  check:
+    name: gate (${{ matrix.toolchain }})
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        toolchain: [stable, 1.85.0]
+    # RUSTUP_TOOLCHAIN overrides rust-toolchain.toml, so the MSRV job really
+    # runs the gate at 1.85.0 instead of the pinned stable.
+    env:
+      RUSTUP_TOOLCHAIN: ${{ matrix.toolchain }}
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Install Rust
+        uses: dtolnay/rust-toolchain@master
+        with:
+          toolchain: ${{ matrix.toolchain }}
+          components: rustfmt, clippy
+
+      # cargo-deny 0.20.2 needs rustc 1.88+ to *build*, so it cannot be
+      # compiled in the MSRV job. Install the prebuilt release binary
+      # instead: version-pinned, toolchain-independent, and fast.
+      - name: Install cargo-deny
+        uses: taiki-e/install-action@v2
+        with:
+          tool: cargo-deny@0.20.2
+
+      # The hatchling-dev unit tests exercise the real
+      # `cargo mutants --version` shell-out in one test
+      # (toolchain_id_contains_mutants_version); every other test uses
+      # a sentinel so the suite stays hermetic. Install the prebuilt
+      # binary (pinned to the version the project standardizes on) so
+      # that one test runs the real tool on CI too. Prebuilt: the MSRV
+      # job could not compile it from source.
+      - name: Install cargo-mutants
+        uses: taiki-e/install-action@v2
+        with:
+          tool: cargo-mutants@27.1.0
+
+      - name: Run gate
+        run: bash scripts/check.sh
+
+  protocol:
+ # the frontend/backend contract has one source, hatchling-core's
+    # wire types. Both generated sides must match it: the schema (Rust) and
+    # the TypeScript types (frontend). A stale or hand-edited side fails here.
+    name: protocol drift
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Install Rust
+        uses: dtolnay/rust-toolchain@master
+        with:
+          toolchain: stable
+
+      - name: Install Node
+        uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+          cache: npm
+          cache-dependency-path: frontend/package-lock.json
+
+      - name: Schema matches the Rust wire types
+        run: cargo run -p hatchling-dev --locked -- protocol-schema
+
+      - name: TypeScript matches the schema
+        working-directory: frontend
+        run: |
+          npm ci
+          npm run protocol:check

@@ -1,0 +1,1511 @@
+//! Cell policy: what the broker's cells are, and the one call that
+//! starts one.
+//!
+//! The broker owns every decision about a cell: its identity
+//! (the configured uid base, which must equal the broker's
+//! `HATCHLING_AGENT_UID`), which host directories it sees and whether it
+//! may write them, its filter class, and its program, arguments and
+//! environment. [`spawn_cell`] writes those decisions into a
+//! [`CellSpec`] and hands it to the platform's isolation backend
+//! (`hatchling-isolation`), which builds exactly that cell and
+//! supervises it. Nothing here names a platform primitive.
+//!
+//! [`spawn_cell`] must be called before the broker starts its
+//! connection threads: the backend forks, and forking a multi-threaded
+//! process is unsound. In `main` the spawn happens between binding the
+//! listener and `serve_forever`.
+//!
+//! The peer-credential story: `SO_PEERCRED` on the broker socket
+//! reports the agent's uid as seen in the *broker's* namespace — the
+//! shifted host uid, i.e. the id map's base. The operator therefore
+//! sets `HATCHLING_AGENT_UID` to the cell's uid base
+//! (`HATCHLING_CELL_UID_BASE`); the existing exact-equality peer gate
+//! needs no change. In the other direction, the agent sees the broker
+//! as the backend says it will (on Linux, the kernel overflow uid), and
+//! the spawner hands that to the agent as `HATCHLING_BROKER_UID`.
+//!
+//! This module contains no `unsafe`, and every isolation mechanism goes
+//! through the backend.
+
+use std::path::{Path, PathBuf};
+
+use hatchling_core::{LogLevel, SocketPath};
+use hatchling_isolation::{
+    Cell as _, CellIdentity, CellSpec, ENDPOINT_DIR, Endpoint, Exit, Exposure, Filter,
+    IsolationBackend, PROGRAM, Tool,
+};
+use serde::{Deserialize, Serialize};
+
+use crate::Error;
+
+/// Where a harness cell sees its work tree: its working
+/// directory.
+const IN_CELL_WORK: &str = "/work";
+
+/// Where a harness cell sees its scratch directory: its `HOME`
+/// and `TMPDIR`.
+const IN_CELL_SCRATCH: &str = "/scratch";
+
+/// Validated cell-spawner configuration.
+///
+/// Serializable so the broker can hand a prepared skill-cell config to
+/// the spawner helper (see [`crate::skill_run`]).
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct CellConfig {
+    /// Host uid that in-cell uid 0 maps to. Always equals the broker's
+    /// configured `HATCHLING_AGENT_UID`: [`CellConfig::from_env`]
+    /// refuses to build a config where they differ, because
+    /// `SO_PEERCRED` reports exactly this uid and the broker's peer
+    /// gate would reject the agent.
+    pub uid_base: u32,
+    /// How many uids the map covers (in-cell `0..uid_count`).
+    pub uid_count: u32,
+    /// Absolute host path of the agent binary to run in the cell.
+    pub agent_bin: PathBuf,
+    /// Cell identity handed to the agent via `HATCHLING_CELL_ID`.
+    pub cell_id: String,
+    /// Absolute host path of the broker socket directory (bind-mounted
+    /// at `/sock` in the cell).
+    pub socket_dir: PathBuf,
+    /// Absolute host path of the broker listen socket. [`spawn_cell`]
+    /// transfers ownership of the socket and its directory to
+    /// [`CellConfig::uid_base`] before forking so the mapped agent can
+    /// traverse the directory and connect.
+    pub socket_path: PathBuf,
+    /// In-cell broker socket path handed to the agent
+    /// (`/sock/<basename>`).
+    pub in_cell_socket: String,
+    /// The uid the agent sees for the broker: the broker's host uid
+    /// translated through the cell's uid map (`uid - base` when mapped),
+    /// or the kernel overflow uid when the broker is unmapped. Handed
+    /// to the agent as `HATCHLING_BROKER_UID`; the agent's peer gate
+    /// compares it against `SO_PEERCRED` with exact equality.
+    pub broker_uid_in_cell: u32,
+    /// Optional skill code directory for skill cells. When set, the
+    /// directory is bind-mounted read-only at `/skill` in the cell, and
+    /// the cell is a skill cell: no broker socket is mounted, and the
+    /// program learns neither the socket's path nor the broker's uid.
+    /// `None` for agent cells (no skill code). Set by
+    /// [`crate::skill_cell::SkillCellConfig::new`], never by the agent
+    /// path.
+    pub skill_code: Option<PathBuf>,
+    /// The scheduled run this cell executes (-2), if it is a run
+    /// cell. The agent is started as `hatchling-agent run <task>`, and
+    /// its environment gains exactly the run's own variables
+    /// ([`ScheduledRun::env`]); nothing else about the cell changes.
+    /// `None` for the broker's agent cell and for skill cells.
+    #[serde(default)]
+    pub scheduled: Option<ScheduledRun>,
+    /// A harness cell's own part: its writable work tree and
+    /// scratch directory, and the arguments the harness runs with. `None`
+    /// for every other cell. A harness cell is a skill cell (no broker
+    /// socket, nothing about the broker in its environment) that may
+    /// write in exactly those two directories.
+    #[serde(default)]
+    pub harness: Option<HarnessDirs>,
+}
+
+/// A harness cell's writable directories and arguments.
+///
+/// In the cell the work tree is `/work` (the harness's working
+/// directory) and the scratch directory `/scratch` (its home and temp).
+/// Both are bound writable, `nosuid,nodev`; everything else stays
+/// read-only.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct HarnessDirs {
+    /// The host directory bound at `/work`.
+    pub work: PathBuf,
+    /// The host directory bound at `/scratch`.
+    pub scratch: PathBuf,
+    /// The harness's arguments, after its program path.
+    pub args: Vec<String>,
+    /// A real CLI's network: `None` for a harness that runs
+    /// offline, under the work-tree filter.
+    pub network: Option<HarnessNetwork>,
+}
+
+/// What a real CLI's cell adds: its relay, the tools it may run,
+/// and the environment that points it at the relay.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct HarnessNetwork {
+    /// The relay's port on the cell's own loopback.
+    pub relay: u16,
+    /// The unix socket, in the broker's private run directory, where the
+    /// spawner hands the cell's relay listener to the broker.
+    pub handoff: PathBuf,
+    /// Host programs the cell may run, and the name it sees each at.
+    pub tools: Vec<(PathBuf, String)>,
+    /// The CLI's own environment: its relay URL, its surrogate key, its
+    /// `PATH`, and its quiet settings.
+    pub env: Vec<(String, String)>,
+}
+
+/// One scheduled run, as its cell receives it (-2).
+///
+/// Typed rather than free-form: a run cell can receive only these
+/// values, under these names. The `missed` flag and the due time are
+/// the broker's assertion, not the agent's.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct ScheduledRun {
+    /// The task text, passed as the `run` subcommand's argument.
+    pub task: String,
+    /// Whether this fire is late because the broker missed it.
+    pub missed: bool,
+    /// When the fire was due, in Unix seconds.
+    pub due: i64,
+    /// The model endpoint the run uses, if the operator configured one.
+    pub model_endpoint: Option<String>,
+    /// The model name, likewise.
+    pub model_name: Option<String>,
+    /// The run's depth in its follow-up chain: 0 unless it is a
+    /// follow-up.
+    #[serde(default)]
+    pub depth: u32,
+    /// For a hook run, the event that fired it: the broker's
+    /// own value, never text the agent wrote.
+    #[serde(default)]
+    pub event: Option<hatchling_core::HookSource>,
+    /// For a subagent's run, its step budget: the agent's own
+    /// loop bound, set by the broker.
+    #[serde(default)]
+    pub max_steps: Option<u32>,
+    /// Whether the run is a subagent: its agent then reports how
+    /// it ended in a typed envelope.
+    #[serde(default)]
+    pub subagent: bool,
+}
+
+impl ScheduledRun {
+    /// The variables a run cell adds to the agent environment, in a
+    /// fixed order.
+    #[must_use]
+    pub fn env(&self) -> Vec<(&'static str, String)> {
+        let mut env = vec![
+            (
+                "HATCHLING_RUN_MISSED",
+                String::from(if self.missed { "1" } else { "0" }),
+            ),
+            ("HATCHLING_RUN_DUE", self.due.to_string()),
+            ("HATCHLING_RUN_DEPTH", self.depth.to_string()),
+        ];
+        if let Some(event) = &self.event {
+            env.push(("HATCHLING_RUN_EVENT", event.to_string()));
+        }
+        if let Some(steps) = self.max_steps {
+            env.push(("HATCHLING_MODEL_MAX_STEPS", steps.to_string()));
+        }
+        if self.subagent {
+            env.push(("HATCHLING_RUN_SUBAGENT", String::from("1")));
+        }
+        if let Some(endpoint) = &self.model_endpoint {
+            env.push(("HATCHLING_MODEL_ENDPOINT", endpoint.clone()));
+        }
+        if let Some(name) = &self.model_name {
+            env.push(("HATCHLING_MODEL_NAME", name.clone()));
+        }
+        env
+    }
+
+    /// The agent's argv: `run` and the task.
+    #[must_use]
+    pub fn argv(&self) -> [&str; 3] {
+        [PROGRAM, "run", self.task.as_str()]
+    }
+}
+
+impl CellConfig {
+    /// Refuses a vault the agent cell could see: the cell
+    /// bind-mounts the broker socket's directory at `/sock`, so neither the
+    /// vault root nor its key file may lie inside it. With an unprivileged
+    /// broker the cell's uid owns the vault, so a vault there would be
+    /// readable from inside.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`Error::InvalidConfig`] naming the setting that put the
+    /// vault or its key in the cell's view.
+    pub fn refuse_vault_in_view(&self, vault: &crate::VaultConfig) -> Result<(), Error> {
+        for (key, path) in [
+            ("HATCHLING_VAULT_DIR", &vault.root),
+            ("HATCHLING_VAULT_KEY_FILE", &vault.key_file),
+        ] {
+            if path.starts_with(&self.socket_dir) {
+                return Err(Error::InvalidConfig {
+                    key,
+                    reason: format!(
+                        "{} is inside the broker socket directory {}, which the agent cell mounts",
+                        path.display(),
+                        self.socket_dir.display()
+                    ),
+                });
+            }
+        }
+        Ok(())
+    }
+
+    /// The base config for a skill cell: the default uid map (as
+    /// [`CellConfig::from_env`] would choose it), no program yet, and no
+    /// broker socket. [`prepare_skill_cell`](crate::skill_cell::prepare_skill_cell)
+    /// sets the verified program and code dir, which makes it a skill
+    /// cell.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`Error::CellMap`] if the default map fails policy
+    /// validation for this broker's privilege level.
+    pub fn skill(cell_id: &str) -> Result<Self, Error> {
+        let backend = hatchling_isolation::platform();
+        let identity = backend.identity(None, 1)?;
+        let broker_uid_in_cell = backend.broker_in_cell(&identity)?;
+        Ok(Self {
+            uid_base: identity.principal,
+            uid_count: identity.count,
+            agent_bin: PathBuf::new(),
+            cell_id: cell_id.to_owned(),
+            socket_dir: PathBuf::new(),
+            socket_path: PathBuf::new(),
+            in_cell_socket: String::new(),
+            broker_uid_in_cell,
+            skill_code: None,
+            scheduled: None,
+            harness: None,
+        })
+    }
+
+    /// A run cell for one scheduled run (-2): the agent binary at
+    /// `agent_bin`, reaching the broker only through the run's own
+    /// socket at `socket` (whose directory is the only host path it
+    /// mounts besides the binary and its libraries), with the uid map
+    /// [`CellConfig::from_env`] would choose for `agent_uid`.
+    ///
+    /// # Errors
+    ///
+    /// As [`CellConfig::from_env`], and [`Error::InvalidConfig`] for a
+    /// task containing a NUL byte (it could not be passed to `exec`).
+    pub fn for_run(
+        agent_bin: &Path,
+        cell_id: &str,
+        socket: &SocketPath,
+        agent_uid: u32,
+        run: ScheduledRun,
+    ) -> Result<Self, Error> {
+        if run.task.contains('\0') {
+            return Err(Error::InvalidConfig {
+                key: "scheduled run",
+                reason: String::from("the task contains a NUL byte"),
+            });
+        }
+        let agent_bin = agent_bin.to_string_lossy().into_owned();
+        let mut config = Self::parse(
+            |key| match key {
+                "HATCHLING_AGENT_BIN" => Some(agent_bin.clone()),
+                "HATCHLING_CELL_ID" => Some(cell_id.to_owned()),
+                other => std::env::var(other).ok(),
+            },
+            socket,
+            agent_uid,
+        )?;
+        config.scheduled = Some(run);
+        Ok(config)
+    }
+
+    /// Whether this is a skill cell (see [`CellConfig::skill_code`]).
+    #[must_use]
+    pub const fn is_skill_cell(&self) -> bool {
+        self.skill_code.is_some()
+    }
+
+    /// Whether this is a harness cell: a skill cell with a
+    /// writable work tree and scratch directory.
+    #[must_use]
+    pub const fn is_harness_cell(&self) -> bool {
+        self.harness.is_some()
+    }
+
+    /// Reads and validates cell configuration from the environment.
+    ///
+    /// `HATCHLING_AGENT_BIN` and `HATCHLING_CELL_ID` are required.
+    /// `HATCHLING_CELL_UID_BASE` defaults to the nobody uid (65534) for
+    /// a root broker and to the broker's own uid otherwise — the only
+    /// map an unprivileged broker can install. `HATCHLING_CELL_UID_COUNT`
+    /// defaults to 1.
+    ///
+    /// `agent_uid` is the broker's configured `HATCHLING_AGENT_UID`
+    /// (what its peer gate expects `SO_PEERCRED` to report). It must
+    /// equal the id-map base: a cell whose agent the broker would
+    /// reject is never spawned.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`Error`] if required values are missing, paths are not
+    /// absolute, the id map fails policy validation, or `agent_uid`
+    /// differs from the map base.
+    pub fn from_env(socket: &SocketPath, agent_uid: u32) -> Result<Self, Error> {
+        Self::parse(|key| std::env::var(key).ok(), socket, agent_uid)
+    }
+
+    /// Builds a cell config for tests without touching process
+    /// environment: the agent binary, cell id, and socket directory
+    /// are given directly; the uid base defaults exactly as
+    /// [`CellConfig::from_env`] would, and must equal `agent_uid`.
+    ///
+    /// This is `pub` so integration tests can construct the exact
+    /// config `spawn_cell` needs. Production code uses `from_env`.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`Error`] if the constructed config fails validation
+    /// (e.g. `agent_uid` differs from the default uid base).
+    pub fn parse_test(
+        agent_bin: &Path,
+        cell_id: &str,
+        socket_dir: &Path,
+        agent_uid: u32,
+    ) -> Result<Self, Error> {
+        let get = |key: &str| match key {
+            "HATCHLING_AGENT_BIN" => Some(agent_bin.to_string_lossy().into_owned()),
+            "HATCHLING_CELL_ID" => Some(cell_id.to_owned()),
+            _ => None,
+        };
+        let socket_path = socket_dir.join("broker.sock");
+        let socket: SocketPath = socket_path
+            .to_str()
+            .and_then(|s| s.parse().ok())
+            .ok_or_else(|| Error::InvalidConfig {
+                key: "test socket path",
+                reason: String::from("not valid UTF-8 or does not parse"),
+            })?;
+        Self::parse(get, &socket, agent_uid)
+    }
+
+    /// Variant of [`CellConfig::parse_test`] that returns the parse
+    /// error instead of panicking: used to assert fail-closed config
+    /// mismatches without forking.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`Error`] if the config parses successfully (the test
+    /// expects failure), or the parse error itself on mismatch.
+    pub fn parse_test_err(
+        agent_bin: &Path,
+        cell_id: &str,
+        socket_dir: &Path,
+        uid_base: u32,
+        agent_uid: u32,
+    ) -> Result<Error, Error> {
+        let get = |key: &str| match key {
+            "HATCHLING_AGENT_BIN" => Some(agent_bin.to_string_lossy().into_owned()),
+            "HATCHLING_CELL_ID" => Some(cell_id.to_owned()),
+            "HATCHLING_CELL_UID_BASE" => Some(uid_base.to_string()),
+            _ => None,
+        };
+        let socket_path = socket_dir.join("broker.sock");
+        let socket: SocketPath = socket_path
+            .to_str()
+            .and_then(|s| s.parse().ok())
+            .ok_or_else(|| Error::InvalidConfig {
+                key: "test socket path",
+                reason: String::from("not valid UTF-8 or does not parse"),
+            })?;
+        match Self::parse(get, &socket, agent_uid) {
+            Ok(_) => Err(Error::InvalidConfig {
+                key: "test",
+                reason: String::from("expected parse to fail"),
+            }),
+            Err(e) => Ok(e),
+        }
+    }
+
+    /// Parses configuration using a key lookup function.
+    ///
+    /// Split out so tests can inject values without touching process
+    /// environment.
+    fn parse(
+        get: impl Fn(&str) -> Option<String>,
+        socket: &SocketPath,
+        agent_uid: u32,
+    ) -> Result<Self, Error> {
+        let agent_bin =
+            get("HATCHLING_AGENT_BIN").ok_or(Error::MissingConfig("HATCHLING_AGENT_BIN"))?;
+        let agent_bin = PathBuf::from(agent_bin);
+        if !agent_bin.is_absolute() {
+            return Err(Error::InvalidConfig {
+                key: "HATCHLING_AGENT_BIN",
+                reason: format!(
+                    "agent binary path must be absolute: {}",
+                    agent_bin.display()
+                ),
+            });
+        }
+        if !agent_bin.is_file() {
+            return Err(Error::InvalidConfig {
+                key: "HATCHLING_AGENT_BIN",
+                reason: format!("agent binary not found: {}", agent_bin.display()),
+            });
+        }
+        let cell_id = get("HATCHLING_CELL_ID").ok_or(Error::MissingConfig("HATCHLING_CELL_ID"))?;
+        if cell_id.trim().is_empty() {
+            return Err(Error::InvalidConfig {
+                key: "HATCHLING_CELL_ID",
+                reason: String::from("cell id must not be blank"),
+            });
+        }
+        let backend = hatchling_isolation::platform();
+        let principal = match get("HATCHLING_CELL_UID_BASE") {
+            Some(raw) => Some(raw.parse::<u32>().map_err(|_| Error::InvalidConfig {
+                key: "HATCHLING_CELL_UID_BASE",
+                reason: String::from("expected a kernel uid as a base-10 u32"),
+            })?),
+            None => None,
+        };
+        let uid_count = match get("HATCHLING_CELL_UID_COUNT") {
+            Some(raw) => raw.parse::<u32>().map_err(|_| Error::InvalidConfig {
+                key: "HATCHLING_CELL_UID_COUNT",
+                reason: String::from("expected a count as a base-10 u32"),
+            })?,
+            None => 1,
+        };
+        let identity = backend.identity(principal, uid_count)?;
+        let uid_base = identity.principal;
+        // The peer gate compares SO_PEERCRED against HATCHLING_AGENT_UID
+        // with exact equality: if the map base drifted from it, the
+        // spawned agent could never authenticate. Fail closed here,
+        // before any host state changes.
+        if agent_uid != uid_base {
+            return Err(Error::InvalidConfig {
+                key: "HATCHLING_CELL_UID_BASE",
+                reason: format!(
+                    "id-map base {uid_base} does not match the broker's HATCHLING_AGENT_UID \
+                     {agent_uid}: SO_PEERCRED would report {uid_base} and the peer gate would \
+                     reject the agent"
+                ),
+            });
+        }
+        let socket_path = socket.as_path().to_path_buf();
+        let socket_dir = socket
+            .as_path()
+            .parent()
+            .ok_or_else(|| Error::InvalidConfig {
+                key: "HATCHLING_BROKER_SOCKET",
+                reason: String::from("broker socket path has no parent directory"),
+            })?
+            .to_path_buf();
+        let socket_name = socket
+            .as_path()
+            .file_name()
+            .ok_or_else(|| Error::InvalidConfig {
+                key: "HATCHLING_BROKER_SOCKET",
+                reason: String::from("broker socket path has no file name"),
+            })?;
+        let broker_uid_in_cell = backend.broker_in_cell(&identity)?;
+        Ok(Self {
+            uid_base,
+            uid_count,
+            agent_bin,
+            cell_id,
+            socket_dir,
+            socket_path,
+            in_cell_socket: format!("{ENDPOINT_DIR}/{}", socket_name.to_string_lossy()),
+            broker_uid_in_cell,
+            // Agent cells never carry skill code; skill cells set this
+            // via `SkillCellConfig::new`.
+            skill_code: None,
+            scheduled: None,
+            harness: None,
+        })
+    }
+}
+
+/// Spawns the cell `config` describes and runs its program inside.
+///
+/// The broker's decisions become a [`CellSpec`] ([`cell_spec`]); the
+/// platform's isolation backend builds exactly that cell and runs the
+/// program as its PID 1, confined (on Linux) by its own namespaces, a
+/// read-only bind-mounted root, the seccomp allowlist, and
+/// `NoNewPrivs`. The returned handle must be [`CellHandle::wait`]ed
+/// (directly, or by a reaper thread) to avoid a zombie and to clean up
+/// the staging directory.
+///
+/// # Errors
+///
+/// Returns [`Error`] if the endpoint handover, the identity, the view,
+/// or any spawn step fails. Failures before the program runs are
+/// fail-closed: nothing runs in a half-built cell.
+pub fn spawn_cell(config: &CellConfig, log_level: LogLevel) -> Result<CellHandle, Error> {
+    let cell = hatchling_isolation::platform().isolate(&cell_spec(config, log_level))?;
+    Ok(CellHandle { cell })
+}
+
+/// A spawned cell under the backend's supervision: bounded waits, and
+/// kill-on-drop. Dropping the handle without [`CellHandle::wait`]ing
+/// ends the cell — no orphans — and removes its staging directory.
+#[derive(Debug)]
+pub struct CellHandle {
+    cell: <hatchling_isolation::Platform as IsolationBackend>::Cell,
+}
+
+impl CellHandle {
+    /// The cell's pid, for diagnostics and logging only. Never a signal
+    /// target: the backend signals through its own supervision.
+    #[must_use]
+    pub fn child_pid(&self) -> i32 {
+        self.cell.pid()
+    }
+
+    /// The cell's relay listener, once: `None` for a cell
+    /// without a network, or once taken.
+    pub fn relay(&mut self) -> Option<std::net::TcpListener> {
+        self.cell.relay()
+    }
+
+    /// Waits for the cell to end, returning the platform's raw status
+    /// (on Linux the reaper's `waitpid` status: the agent's exit code,
+    /// or `124` if the agent exceeded the maximum runtime). The exit
+    /// code itself is [`CellHandle::wait_exit`]'s.
+    ///
+    /// # Errors
+    ///
+    /// As [`CellHandle::wait_exit`].
+    pub fn wait(self) -> Result<i32, Error> {
+        self.wait_exit().map(|exit| exit.status)
+    }
+
+    /// Waits for the cell to end, within the backend's bound on a
+    /// cell's runtime, and reports how it ended.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`Error::CellSpawn`] if the cell reported a setup
+    /// failure, or [`Error::CellWait`] if waiting fails or the maximum
+    /// runtime is exceeded.
+    pub fn wait_exit(self) -> Result<Exit, Error> {
+        Ok(self.cell.wait()?)
+    }
+}
+
+/// A helper process under the platform backend's supervision.
+pub(crate) type Process = <hatchling_isolation::Platform as IsolationBackend>::Process;
+
+/// Where the cell program starts, when not at `/`: a harness cell
+/// works in its work tree, `/work`.
+fn cell_workdir(config: &CellConfig) -> Option<&'static str> {
+    config.is_harness_cell().then_some(IN_CELL_WORK)
+}
+
+/// The filter class the cell program runs under: a real CLI's is the CLI
+/// class, another harness cell's adds the file calls it needs to
+/// edit its work tree, and every other cell gets the agent's.
+const fn cell_filter(config: &CellConfig) -> Filter {
+    match &config.harness {
+        Some(HarnessDirs {
+            network: Some(_), ..
+        }) => Filter::Cli,
+        Some(_) => Filter::WorkTree,
+        None => Filter::Program,
+    }
+}
+
+/// A harness cell's network, if it has one.
+fn harness_network(config: &CellConfig) -> Option<&HarnessNetwork> {
+    config
+        .harness
+        .as_ref()
+        .and_then(|harness| harness.network.as_ref())
+}
+
+/// The cell program's environment and argv, exactly as it runs with
+/// them.
+///
+/// - **An agent cell** gets its cell id, the in-cell broker socket, the
+///   broker's in-cell uid, and the log level.
+/// - **A skill cell** learns nothing about the broker: it has no socket
+///   to reach, and gets no address or uid to try.
+/// - **A run cell** is an agent cell that adds exactly its run's
+///   variables ([`ScheduledRun::env`]) and runs the agent's `run`
+///   subcommand on its task.
+/// - **A harness cell** is a skill cell whose `HOME` and `TMPDIR` are its
+///   scratch directory, and whose program runs with the harness's
+///   arguments. Nothing else: no vault, no broker, no host
+///   variable.
+fn program_env(config: &CellConfig, log_level: LogLevel) -> (Vec<String>, Vec<(String, String)>) {
+    let mut env = vec![(String::from("HATCHLING_CELL_ID"), config.cell_id.clone())];
+    if !config.is_skill_cell() {
+        env.push((
+            String::from("HATCHLING_BROKER_SOCKET"),
+            config.in_cell_socket.clone(),
+        ));
+        env.push((
+            String::from("HATCHLING_BROKER_UID"),
+            config.broker_uid_in_cell.to_string(),
+        ));
+    }
+    env.push((
+        String::from("HATCHLING_LOG_LEVEL"),
+        String::from(log_level_name(log_level)),
+    ));
+    if config.is_harness_cell() {
+        for key in ["HOME", "TMPDIR"] {
+            env.push((String::from(key), String::from(IN_CELL_SCRATCH)));
+        }
+    }
+    if let Some(network) = harness_network(config) {
+        env.extend(network.env.iter().cloned());
+    }
+    let harness_args = config.harness.as_ref().map(|harness| harness.args.clone());
+    let argv = config.scheduled.as_ref().map_or_else(
+        || {
+            let mut argv = vec![String::from(PROGRAM)];
+            argv.extend(harness_args.unwrap_or_default());
+            argv
+        },
+        |run| {
+            env.extend(
+                run.env()
+                    .into_iter()
+                    .map(|(key, value)| (key.to_owned(), value)),
+            );
+            run.argv().iter().map(|arg| (*arg).to_owned()).collect()
+        },
+    );
+    (argv, env)
+}
+
+/// Canonical log-level name for the cell environment.
+const fn log_level_name(level: LogLevel) -> &'static str {
+    match level {
+        LogLevel::Error => "error",
+        LogLevel::Warn => "warn",
+        LogLevel::Info => "info",
+        LogLevel::Debug => "debug",
+        LogLevel::Trace => "trace",
+    }
+}
+
+/// The broker's decisions for one cell, as the isolation backend takes
+/// them.
+///
+/// - **Identity:** the configured uid base and count.
+/// - **Endpoint:** agent cells only. A skill cell runs under the same
+///   uid mapping as the agent, so a reachable socket would pass the
+///   broker's peer gate and let the skill speak as the agent.
+/// - **Exposures:** [`cell_exposures`].
+/// - **Program:** the configured binary, with [`program_env`]'s argv and
+///   environment, starting in [`cell_workdir`], under [`cell_filter`].
+fn cell_spec(config: &CellConfig, log_level: LogLevel) -> CellSpec {
+    let (argv, env) = program_env(config, log_level);
+    CellSpec {
+        identity: CellIdentity {
+            principal: config.uid_base,
+            count: config.uid_count,
+        },
+        program: config.agent_bin.clone(),
+        argv,
+        env,
+        workdir: cell_workdir(config).map(String::from),
+        endpoint: (!config.is_skill_cell()).then(|| Endpoint {
+            socket: config.socket_path.clone(),
+            dir: config.socket_dir.clone(),
+        }),
+        exposures: cell_exposures(config),
+        tools: harness_network(config).map_or_else(Vec::new, |network| {
+            network
+                .tools
+                .iter()
+                .map(|(source, name)| Tool {
+                    source: source.clone(),
+                    name: name.clone(),
+                })
+                .collect()
+        }),
+        relay: harness_network(config).map(|network| network.relay),
+        filter: cell_filter(config),
+    }
+}
+
+/// The host directories a cell sees besides its program and endpoint:
+/// a skill cell's code read-only at `/skill`, and a harness cell's work
+/// tree and scratch directory, the only writable directories any cell
+/// gets. Each is the broker's own path, never one a skill
+/// supplied.
+fn cell_exposures(config: &CellConfig) -> Vec<Exposure> {
+    let mut exposures = Vec::new();
+    if let Some(skill_code) = &config.skill_code {
+        exposures.push(Exposure {
+            source: skill_code.clone(),
+            name: String::from("skill"),
+            writable: false,
+            label: "skill code dir",
+        });
+    }
+    if let Some(harness) = &config.harness {
+        for (dir, name) in [(&harness.work, "work"), (&harness.scratch, "scratch")] {
+            exposures.push(Exposure {
+                source: dir.clone(),
+                name: String::from(name),
+                writable: true,
+                label: "harness directory",
+            });
+        }
+    }
+    exposures
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use std::collections::HashMap;
+
+    fn socket(path: &str) -> SocketPath {
+        path.parse().unwrap()
+    }
+
+    fn lookup<'a>(vars: &'a HashMap<&'a str, &'a str>) -> impl Fn(&str) -> Option<String> + 'a {
+        move |key| vars.get(key).map(|value| (*value).to_owned())
+    }
+
+    fn valid_vars() -> HashMap<&'static str, &'static str> {
+        HashMap::from([
+            ("HATCHLING_AGENT_BIN", "/bin/true"),
+            ("HATCHLING_CELL_ID", "cell-01"),
+        ])
+    }
+
+    /// The principal the platform backend runs a default cell as.
+    fn default_base() -> u32 {
+        hatchling_isolation::platform()
+            .identity(None, 1)
+            .unwrap()
+            .principal
+    }
+
+    /// The broker's own principal.
+    fn owner() -> u32 {
+        hatchling_isolation::platform().owner()
+    }
+
+    #[test]
+    fn parses_valid_cell_config_with_defaults() {
+        let vars = valid_vars();
+        let config = CellConfig::parse(
+            lookup(&vars),
+            &socket("/tmp/hatchling-test/broker.sock"),
+            default_base(),
+        )
+        .unwrap();
+        assert_eq!(config.agent_bin, Path::new("/bin/true"));
+        assert_eq!(config.cell_id, "cell-01");
+        assert_eq!(config.uid_count, 1);
+        assert_eq!(config.socket_dir, Path::new("/tmp/hatchling-test"));
+        assert_eq!(config.in_cell_socket, "/sock/broker.sock");
+        // Defaults depend on privilege (the backend's choice): root gets
+        // nobody, unprivileged gets its own uid.
+        assert_eq!(config.uid_base, default_base());
+        // The broker's in-cell uid is the backend's answer for the map:
+        // an unprivileged broker maps its own uid to in-cell 0.
+        let backend = hatchling_isolation::platform();
+        let identity = backend.identity(None, 1).unwrap();
+        assert_eq!(
+            config.broker_uid_in_cell,
+            backend.broker_in_cell(&identity).unwrap()
+        );
+        if owner() != 0 {
+            assert_eq!(config.broker_uid_in_cell, 0);
+        }
+    }
+
+    #[test]
+    fn missing_agent_bin_is_an_error() {
+        let mut vars = valid_vars();
+        vars.remove("HATCHLING_AGENT_BIN");
+        let err = CellConfig::parse(lookup(&vars), &socket("/tmp/x/broker.sock"), default_base())
+            .unwrap_err();
+        assert!(matches!(err, Error::MissingConfig("HATCHLING_AGENT_BIN")));
+    }
+
+    #[test]
+    fn missing_cell_id_is_an_error() {
+        let mut vars = valid_vars();
+        vars.remove("HATCHLING_CELL_ID");
+        let err = CellConfig::parse(lookup(&vars), &socket("/tmp/x/broker.sock"), default_base())
+            .unwrap_err();
+        assert!(matches!(err, Error::MissingConfig("HATCHLING_CELL_ID")));
+    }
+
+    #[test]
+    fn relative_agent_bin_is_an_error() {
+        let mut vars = valid_vars();
+        vars.insert("HATCHLING_AGENT_BIN", "relative/agent");
+        let err = CellConfig::parse(lookup(&vars), &socket("/tmp/x/broker.sock"), default_base())
+            .unwrap_err();
+        assert!(matches!(err, Error::InvalidConfig { key, .. } if key == "HATCHLING_AGENT_BIN"));
+    }
+
+    #[test]
+    fn missing_agent_binary_is_an_error() {
+        let mut vars = valid_vars();
+        vars.insert("HATCHLING_AGENT_BIN", "/nonexistent/agent-binary");
+        let err = CellConfig::parse(lookup(&vars), &socket("/tmp/x/broker.sock"), default_base())
+            .unwrap_err();
+        assert!(matches!(err, Error::InvalidConfig { key, .. } if key == "HATCHLING_AGENT_BIN"));
+    }
+
+    #[test]
+    fn invalid_uid_base_is_an_error() {
+        for raw in ["not-a-uid", "-1", ""] {
+            let mut vars = valid_vars();
+            vars.insert("HATCHLING_CELL_UID_BASE", raw);
+            let err =
+                CellConfig::parse(lookup(&vars), &socket("/tmp/x/broker.sock"), default_base())
+                    .unwrap_err();
+            assert!(
+                matches!(err, Error::InvalidConfig { key, .. } if key == "HATCHLING_CELL_UID_BASE"),
+                "raw value {raw:?} should be rejected"
+            );
+        }
+    }
+
+    #[test]
+    fn root_mapping_cell_root_to_host_root_is_an_error() {
+        // Only meaningful when running as root; unprivileged the map
+        // validation rejects base 0 for a different reason.
+        if owner() != 0 {
+            return;
+        }
+        let mut vars = valid_vars();
+        vars.insert("HATCHLING_CELL_UID_BASE", "0");
+        // Pass agent_uid 0 explicitly: the uid-base/agent-uid
+        // consistency check must not mask the map-policy rejection.
+        let err = CellConfig::parse(lookup(&vars), &socket("/tmp/x/broker.sock"), 0).unwrap_err();
+        assert!(matches!(err, Error::CellMap { .. }));
+    }
+
+    #[test]
+    fn agent_uid_mismatch_with_uid_base_is_an_error() {
+        // SO_PEERCRED reports the map base; the broker's peer gate
+        // expects HATCHLING_AGENT_UID. If they differ the agent could
+        // never authenticate, so config parsing fails closed.
+        let vars = valid_vars();
+        let base = default_base();
+        let err =
+            CellConfig::parse(lookup(&vars), &socket("/tmp/x/broker.sock"), base + 1).unwrap_err();
+        assert!(
+            matches!(err, Error::InvalidConfig { key, .. } if key == "HATCHLING_CELL_UID_BASE")
+        );
+    }
+
+    #[test]
+    fn log_level_names_cover_every_variant() {
+        // Pins the match exhaustiveness: a new LogLevel variant fails
+        // compilation here, forcing a conscious env spelling.
+        assert_eq!(log_level_name(LogLevel::Error), "error");
+        assert_eq!(log_level_name(LogLevel::Warn), "warn");
+        assert_eq!(log_level_name(LogLevel::Info), "info");
+        assert_eq!(log_level_name(LogLevel::Debug), "debug");
+        assert_eq!(log_level_name(LogLevel::Trace), "trace");
+    }
+
+    #[test]
+    fn parse_test_wires_agent_bin_and_cell_id() {
+        // Mutants: delete match arm "HATCHLING_AGENT_BIN" /
+        // "HATCHLING_CELL_ID" in parse_test. Each arm must actually
+        // feed its value into the config.
+        let dir = std::env::temp_dir().join(format!("hatchling-parse-test-{}", std::process::id()));
+        std::fs::create_dir_all(&dir).unwrap();
+        let base = default_base();
+        let config =
+            CellConfig::parse_test(Path::new("/bin/true"), "cell-parse-01", &dir, base).unwrap();
+        assert_eq!(config.agent_bin, Path::new("/bin/true"));
+        assert_eq!(config.cell_id, "cell-parse-01");
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn parse_test_err_wires_uid_base() {
+        // Mutant: delete match arm "HATCHLING_CELL_UID_BASE" in
+        // parse_test_err. The arm must inject the uid_base arg into
+        // the parse; without it, the parse uses the default base.
+        //
+        // Root strategy: pass a uid_base that differs from the
+        // default but matches agent_uid, so parse SUCCEEDS with the
+        // arm present (parse_test_err returns Err("expected parse to
+        // fail")) but FAILS with the arm deleted (default base
+        // mismatches agent_uid, parse_test_err returns Ok).
+        //
+        // Unprivileged strategy: the only valid base is the euid
+        // itself, which equals the default — so instead pass an
+        // INVALID base with agent_uid = euid. With the arm present,
+        // the idmap validator rejects it (parse fails, parse_test_err
+        // returns Ok); with the arm deleted, the default base matches
+        // agent_uid, parse succeeds, parse_test_err returns Err.
+        let euid = owner();
+        let dir = std::env::temp_dir().join(format!("hatchling-parse-err-{}", std::process::id()));
+        std::fs::create_dir_all(&dir).unwrap();
+        let result = if euid == 0 {
+            // 50000 differs from the root default (65534) and is
+            // valid for a root broker.
+            let base = 50000u32;
+            CellConfig::parse_test_err(
+                Path::new("/bin/true"),
+                "cell-parse-02",
+                &dir,
+                base,
+                base, // matches: parse must succeed with the arm present
+            )
+        } else {
+            CellConfig::parse_test_err(
+                Path::new("/bin/true"),
+                "cell-parse-02",
+                &dir,
+                50000, // invalid for an unprivileged broker
+                euid,  // matches the default base if the arm is deleted
+            )
+        };
+        let _ = std::fs::remove_dir_all(&dir);
+        if euid == 0 {
+            assert!(
+                result.is_err(),
+                "parse with matching uid_base/agent_uid must succeed (arm must inject the base), got {result:?}"
+            );
+        } else {
+            assert!(
+                result.is_ok(),
+                "parse with an invalid uid_base must fail (arm must inject the base), got {result:?}"
+            );
+        }
+    }
+
+    #[test]
+    fn parse_test_err_wires_agent_bin_and_cell_id() {
+        // Mutants: delete match arm "HATCHLING_AGENT_BIN" or
+        // "HATCHLING_CELL_ID" in parse_test_err. Each arm must feed
+        // its value into the parse: with both present and valid, parse
+        // SUCCEEDS (parse_test_err returns Err("expected parse to
+        // fail")); with either deleted, the key is missing and parse
+        // fails (parse_test_err returns Ok). Needs no privilege: the
+        // base matches agent_uid in both privilege modes.
+        let euid = owner();
+        // A root broker must not map base 0; 50000 is valid there.
+        // Unprivileged, the euid is the only valid base.
+        let (base, agent) = if euid == 0 {
+            (50000u32, 50000u32)
+        } else {
+            (euid, euid)
+        };
+        let dir = std::env::temp_dir().join(format!("hatchling-parse-keys-{}", std::process::id()));
+        std::fs::create_dir_all(&dir).unwrap();
+        let result =
+            CellConfig::parse_test_err(Path::new("/bin/true"), "cell-parse-03", &dir, base, agent);
+        let _ = std::fs::remove_dir_all(&dir);
+        assert!(
+            result.is_err(),
+            "parse with all keys wired must succeed, got {result:?}"
+        );
+    }
+
+    #[test]
+    fn a_skill_base_config_has_the_default_map_and_no_socket() {
+        let config = CellConfig::skill("skill-x").unwrap();
+        assert_eq!(config.uid_base, default_base());
+        assert_eq!(config.uid_count, 1);
+        assert_eq!(config.cell_id, "skill-x");
+        assert_eq!(config.socket_dir, PathBuf::new());
+        assert_eq!(config.socket_path, PathBuf::new());
+        assert!(config.in_cell_socket.is_empty());
+        // The broker's in-cell uid is computed exactly as for the agent.
+        let agent = CellConfig::parse_test(
+            Path::new("/bin/true"),
+            "agent-x",
+            Path::new("/tmp"),
+            default_base(),
+        )
+        .unwrap();
+        assert_eq!(config.broker_uid_in_cell, agent.broker_uid_in_cell);
+        // Not a skill cell until the verified code is set.
+        assert!(!config.is_skill_cell());
+        let mut skill = config;
+        skill.skill_code = Some(PathBuf::from("/tmp/code"));
+        assert!(skill.is_skill_cell());
+    }
+
+    #[test]
+    fn a_cell_config_round_trips_through_its_spec() {
+        let mut config = CellConfig::skill("skill-y").unwrap();
+        config.agent_bin = PathBuf::from("/tmp/code/skill");
+        config.skill_code = Some(PathBuf::from("/tmp/code"));
+        let spec = serde_json::to_string(&config).unwrap();
+        let back: CellConfig = serde_json::from_str(&spec).unwrap();
+        assert_eq!(format!("{back:?}"), format!("{config:?}"));
+    }
+
+    #[test]
+    fn an_agent_cells_spec_is_the_brokers_decisions() {
+        let dir = std::env::temp_dir().join(format!("hatchling-spec-{}", std::process::id()));
+        std::fs::create_dir_all(&dir).unwrap();
+        let config =
+            CellConfig::parse_test(Path::new("/bin/true"), "cell-spec-01", &dir, default_base())
+                .unwrap();
+        let spec = cell_spec(&config, LogLevel::Info);
+        let _ = std::fs::remove_dir_all(&dir);
+        assert_eq!(
+            spec.identity,
+            CellIdentity {
+                principal: config.uid_base,
+                count: config.uid_count,
+            }
+        );
+        assert_eq!(spec.program, Path::new("/bin/true"));
+        assert_eq!(
+            (spec.argv.clone(), spec.env.clone()),
+            program_env(&config, LogLevel::Info)
+        );
+        assert_eq!(
+            spec.endpoint,
+            Some(Endpoint {
+                socket: dir.join("broker.sock"),
+                dir: dir.clone(),
+            })
+        );
+        assert!(spec.exposures.is_empty());
+        assert_eq!(spec.workdir, None);
+        assert_eq!(spec.filter, Filter::Program);
+    }
+
+    #[test]
+    fn a_skill_cells_spec_has_its_code_and_no_endpoint() {
+        let mut config = CellConfig::skill("skill-spec").unwrap();
+        config.agent_bin = PathBuf::from("/tmp/code/skill");
+        config.skill_code = Some(PathBuf::from("/tmp/code"));
+        let spec = cell_spec(&config, LogLevel::Error);
+        assert_eq!(spec.endpoint, None);
+        assert_eq!(spec.program, Path::new("/tmp/code/skill"));
+        assert_eq!(
+            spec.exposures,
+            [Exposure {
+                source: PathBuf::from("/tmp/code"),
+                name: String::from("skill"),
+                writable: false,
+                label: "skill code dir",
+            }]
+        );
+    }
+
+    /// A real cell through the broker's own call: the program runs, and
+    /// both waits report how it ended. On a box that cannot build a cell
+    /// the spawn fails: an honest skip, unless `HATCHLING_REQUIRE_CELL=1`.
+    #[test]
+    fn a_spawned_cell_reports_its_exit_both_ways() {
+        let code = std::env::temp_dir().join(format!("hatchling-spawn-{}", std::process::id()));
+        std::fs::create_dir_all(&code).unwrap();
+        let mut config = CellConfig::skill("spawn-x").unwrap();
+        config.agent_bin = PathBuf::from("/bin/true");
+        config.skill_code = Some(code.clone());
+        let mut handle = match spawn_cell(&config, LogLevel::Error) {
+            Ok(handle) => handle,
+            Err(error) => {
+                let _ = std::fs::remove_dir_all(&code);
+                let required = std::env::var("HATCHLING_REQUIRE_CELL").is_ok_and(|v| v == "1");
+                assert!(!required, "HATCHLING_REQUIRE_CELL=1 but no cell: {error}");
+                return;
+            }
+        };
+        assert!(handle.child_pid() > 1);
+        assert!(handle.relay().is_none(), "a cell without a network");
+        let exit = handle.wait_exit().unwrap();
+        assert_eq!(exit.code, 0);
+        let handle = spawn_cell(&config, LogLevel::Error).unwrap();
+        assert_eq!(handle.wait().unwrap(), exit.status);
+        let _ = std::fs::remove_dir_all(&code);
+    }
+
+    #[test]
+    fn a_failed_spawn_is_the_brokers_error() {
+        // An agent cell whose broker socket is missing is refused before
+        // anything is built.
+        let dir = std::env::temp_dir().join(format!("hatchling-nosock-{}", std::process::id()));
+        std::fs::create_dir_all(&dir).unwrap();
+        let config = CellConfig::parse_test(
+            Path::new("/bin/true"),
+            "spawn-missing",
+            &dir,
+            default_base(),
+        )
+        .unwrap();
+        let error = spawn_cell(&config, LogLevel::Error).unwrap_err();
+        let _ = std::fs::remove_dir_all(&dir);
+        assert!(
+            matches!(&error, Error::CellSpawn { reason } if reason.starts_with("cannot inspect broker socket ")),
+            "{error:?}"
+        );
+    }
+}
+
+#[cfg(test)]
+mod run_cell_tests {
+    use super::*;
+
+    fn run() -> ScheduledRun {
+        ScheduledRun {
+            task: String::from("check the build"),
+            missed: true,
+            due: 1_790_000_000,
+            model_endpoint: Some(String::from("https://models.example.com/v1")),
+            model_name: Some(String::from("m-1")),
+            depth: 2,
+            event: Some(hatchling_core::HookSource::ChannelMessage {
+                channel: String::from("local"),
+            }),
+            max_steps: None,
+            subagent: false,
+        }
+    }
+
+    fn agent_cell() -> CellConfig {
+        let mut config = CellConfig::skill("cell-a").unwrap();
+        config.in_cell_socket = String::from("/sock/broker.sock");
+        config
+    }
+
+    fn keys(env: &[(String, String)]) -> Vec<&str> {
+        env.iter().map(|(key, _)| key.as_str()).collect()
+    }
+
+    #[test]
+    fn an_agent_cell_gets_the_broker_address_and_no_run() {
+        let (argv, env) = program_env(&agent_cell(), LogLevel::Warn);
+        assert_eq!(argv, [PROGRAM]);
+        assert_eq!(
+            keys(&env),
+            [
+                "HATCHLING_CELL_ID",
+                "HATCHLING_BROKER_SOCKET",
+                "HATCHLING_BROKER_UID",
+                "HATCHLING_LOG_LEVEL"
+            ]
+        );
+        assert!(env.contains(&(String::from("HATCHLING_LOG_LEVEL"), String::from("warn"))));
+        assert!(env.contains(&(
+            String::from("HATCHLING_BROKER_SOCKET"),
+            String::from("/sock/broker.sock")
+        )));
+    }
+
+    #[test]
+    fn a_skill_cell_learns_nothing_about_the_broker() {
+        let mut skill = agent_cell();
+        skill.skill_code = Some(PathBuf::from("/tmp/code"));
+        let (argv, env) = program_env(&skill, LogLevel::Error);
+        assert_eq!(argv, [PROGRAM]);
+        assert_eq!(keys(&env), ["HATCHLING_CELL_ID", "HATCHLING_LOG_LEVEL"]);
+    }
+
+    #[test]
+    fn a_run_cell_runs_its_task_with_exactly_its_run_variables() {
+        let mut cell = agent_cell();
+        cell.scheduled = Some(run());
+        let (argv, env) = program_env(&cell, LogLevel::Error);
+        assert_eq!(argv, [PROGRAM, "run", "check the build"]);
+        assert_eq!(
+            keys(&env),
+            [
+                "HATCHLING_CELL_ID",
+                "HATCHLING_BROKER_SOCKET",
+                "HATCHLING_BROKER_UID",
+                "HATCHLING_LOG_LEVEL",
+                "HATCHLING_RUN_MISSED",
+                "HATCHLING_RUN_DUE",
+                "HATCHLING_RUN_DEPTH",
+                "HATCHLING_RUN_EVENT",
+                "HATCHLING_MODEL_ENDPOINT",
+                "HATCHLING_MODEL_NAME"
+            ]
+        );
+        assert!(env.contains(&(String::from("HATCHLING_RUN_DEPTH"), String::from("2"))));
+        assert!(env.contains(&(
+            String::from("HATCHLING_RUN_EVENT"),
+            String::from("channel-message:local")
+        )));
+        assert!(env.contains(&(String::from("HATCHLING_RUN_MISSED"), String::from("1"))));
+        assert!(env.contains(&(
+            String::from("HATCHLING_RUN_DUE"),
+            String::from("1790000000")
+        )));
+        let on_time = ScheduledRun {
+            missed: false,
+            model_endpoint: None,
+            model_name: None,
+            depth: 0,
+            event: None,
+            ..run()
+        };
+        assert_eq!(
+            on_time.env(),
+            [
+                ("HATCHLING_RUN_MISSED", String::from("0")),
+                ("HATCHLING_RUN_DUE", String::from("1790000000")),
+                ("HATCHLING_RUN_DEPTH", String::from("0"))
+            ]
+        );
+    }
+
+    #[test]
+    fn a_runs_argv_is_the_agents_run_subcommand() {
+        assert_eq!(run().argv(), [PROGRAM, "run", "check the build"]);
+    }
+
+    #[test]
+    fn a_subagents_run_carries_its_budget_and_its_mode() {
+        let child = ScheduledRun {
+            missed: false,
+            model_endpoint: None,
+            model_name: None,
+            depth: 0,
+            event: None,
+            max_steps: Some(4),
+            subagent: true,
+            ..run()
+        };
+        assert_eq!(
+            child.env(),
+            [
+                ("HATCHLING_RUN_MISSED", String::from("0")),
+                ("HATCHLING_RUN_DUE", String::from("1790000000")),
+                ("HATCHLING_RUN_DEPTH", String::from("0")),
+                ("HATCHLING_MODEL_MAX_STEPS", String::from("4")),
+                ("HATCHLING_RUN_SUBAGENT", String::from("1")),
+            ]
+        );
+    }
+
+    #[test]
+    fn a_run_cell_is_configured_for_its_own_socket_only() {
+        let dir =
+            std::env::temp_dir().join(format!("hatchling-test-runcell-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&dir);
+        std::fs::create_dir_all(&dir).unwrap();
+        let bin = dir.join("agent");
+        std::fs::write(&bin, b"#!").unwrap();
+        let socket: SocketPath = dir
+            .join("run-1")
+            .join("broker.sock")
+            .to_string_lossy()
+            .parse()
+            .unwrap();
+        let uid = hatchling_isolation::platform()
+            .identity(None, 1)
+            .unwrap()
+            .principal;
+        let cell = CellConfig::for_run(&bin, "run-1", &socket, uid, run()).unwrap();
+        assert_eq!(cell.socket_dir, dir.join("run-1"));
+        assert_eq!(cell.socket_path, dir.join("run-1").join("broker.sock"));
+        assert_eq!(cell.in_cell_socket, "/sock/broker.sock");
+        assert_eq!(cell.cell_id, "run-1");
+        assert_eq!(cell.scheduled, Some(run()));
+        assert!(!cell.is_skill_cell());
+        let nul = ScheduledRun {
+            task: String::from("a\0b"),
+            ..run()
+        };
+        assert!(matches!(
+            CellConfig::for_run(&bin, "run-1", &socket, uid, nul),
+            Err(Error::InvalidConfig {
+                key: "scheduled run",
+                ..
+            })
+        ));
+        // The spec round-trips, run included.
+        let back: CellConfig =
+            serde_json::from_str(&serde_json::to_string(&cell).unwrap()).unwrap();
+        assert_eq!(back.scheduled, Some(run()));
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+}
+
+#[cfg(test)]
+mod harness_cell_tests {
+    use super::*;
+
+    /// A scratch directory, removed when dropped.
+    struct Scratch(PathBuf);
+
+    impl Scratch {
+        fn new(name: &str) -> Self {
+            let dir = std::env::temp_dir().join(format!(
+                "hatchling-harness-cell-{}-{name}",
+                std::process::id()
+            ));
+            let _ = std::fs::remove_dir_all(&dir);
+            for sub in ["code", "work", "scratch", "root"] {
+                std::fs::create_dir_all(dir.join(sub)).unwrap();
+            }
+            Self(dir)
+        }
+    }
+
+    impl Drop for Scratch {
+        fn drop(&mut self) {
+            let _ = std::fs::remove_dir_all(&self.0);
+        }
+    }
+
+    /// A skill cell running this test binary, and its harness twin.
+    fn cells(scratch: &Scratch) -> (CellConfig, CellConfig) {
+        let mut skill = CellConfig::skill("harness").unwrap();
+        skill.agent_bin = std::env::current_exe().unwrap();
+        skill.skill_code = Some(scratch.0.join("code"));
+        let mut harness = skill.clone();
+        harness.harness = Some(HarnessDirs {
+            work: scratch.0.join("work"),
+            scratch: scratch.0.join("scratch"),
+            args: vec![String::from("-p"), String::from("Go.")],
+            network: None,
+        });
+        (skill, harness)
+    }
+
+    /// The harness twin with a network.
+    fn networked(harness: &CellConfig) -> CellConfig {
+        let mut networked = harness.clone();
+        if let Some(dirs) = networked.harness.as_mut() {
+            dirs.network = Some(HarnessNetwork {
+                relay: 8787,
+                handoff: PathBuf::from("/run/handoff"),
+                tools: vec![(PathBuf::from("/bin/sh"), String::from("bin/sh"))],
+                env: vec![(String::from("CLI_KEY"), String::from("surrogate"))],
+            });
+        }
+        networked
+    }
+
+    #[test]
+    fn only_a_networked_harness_cell_has_the_cli_filter_its_relay_and_its_tools() {
+        let scratch = Scratch::new("network");
+        let (skill, harness) = cells(&scratch);
+        let networked = networked(&harness);
+        assert_eq!(cell_filter(&networked), Filter::Cli);
+        assert!(harness_network(&skill).is_none());
+        assert!(harness_network(&harness).is_none());
+        assert_eq!(
+            harness_network(&networked).map(|network| network.relay),
+            Some(8787)
+        );
+        let spec = cell_spec(&networked, LogLevel::Error);
+        assert_eq!(spec.relay, Some(8787));
+        assert_eq!(
+            spec.tools,
+            [Tool {
+                source: PathBuf::from("/bin/sh"),
+                name: String::from("bin/sh"),
+            }]
+        );
+        assert!(
+            spec.env
+                .contains(&(String::from("CLI_KEY"), String::from("surrogate")))
+        );
+        let plain = cell_spec(&harness, LogLevel::Error);
+        assert_eq!(plain.relay, None);
+        assert!(plain.tools.is_empty());
+        assert!(!plain.env.iter().any(|(key, _)| key == "CLI_KEY"));
+    }
+
+    #[test]
+    fn a_harness_cell_starts_in_its_work_tree_and_every_other_cell_at_the_root() {
+        let scratch = Scratch::new("workdir");
+        let (skill, harness) = cells(&scratch);
+        assert_eq!(cell_workdir(&harness), Some("/work"));
+        assert_eq!(cell_workdir(&skill), None);
+        assert_eq!(cell_workdir(&CellConfig::skill("agent").unwrap()), None);
+    }
+
+    #[test]
+    fn only_a_harness_cell_runs_under_the_work_tree_filter() {
+        let scratch = Scratch::new("profile");
+        let (skill, harness) = cells(&scratch);
+        assert_eq!(cell_filter(&harness), Filter::WorkTree);
+        assert_eq!(cell_filter(&skill), Filter::Program);
+        assert_eq!(
+            cell_filter(&CellConfig::skill("agent").unwrap()),
+            Filter::Program
+        );
+    }
+
+    #[test]
+    fn a_harness_cell_writes_only_its_work_tree_and_scratch() {
+        let scratch = Scratch::new("plan");
+        let (skill, harness) = cells(&scratch);
+        let writable = |config: &CellConfig| -> Vec<(String, PathBuf)> {
+            cell_exposures(config)
+                .into_iter()
+                .filter(|exposure| exposure.writable)
+                .map(|exposure| (exposure.name, exposure.source))
+                .collect()
+        };
+        assert_eq!(
+            writable(&harness),
+            [
+                (String::from("work"), scratch.0.join("work")),
+                (String::from("scratch"), scratch.0.join("scratch"))
+            ]
+        );
+        assert!(writable(&skill).is_empty(), "no other cell writes anywhere");
+        let names = |config: &CellConfig| -> Vec<String> {
+            cell_exposures(config)
+                .into_iter()
+                .map(|exposure| exposure.name)
+                .collect()
+        };
+        assert_eq!(names(&skill), ["skill"]);
+        assert_eq!(names(&harness), ["skill", "work", "scratch"]);
+        assert!(cell_exposures(&CellConfig::skill("agent").unwrap()).is_empty());
+        let spec = cell_spec(&harness, LogLevel::Error);
+        assert_eq!(spec.workdir.as_deref(), Some("/work"));
+        assert_eq!(spec.filter, Filter::WorkTree);
+        assert_eq!(spec.endpoint, None, "a harness cell has no socket");
+    }
+
+    #[test]
+    fn a_harness_cell_lives_in_scratch_and_runs_with_its_arguments() {
+        let scratch = Scratch::new("env");
+        let (_, harness) = cells(&scratch);
+        let (argv, env) = program_env(&harness, LogLevel::Error);
+        assert_eq!(argv, ["/agent", "-p", "Go."]);
+        let keys: Vec<&str> = env.iter().map(|(key, _)| key.as_str()).collect();
+        assert_eq!(
+            keys,
+            ["HATCHLING_CELL_ID", "HATCHLING_LOG_LEVEL", "HOME", "TMPDIR"]
+        );
+        assert!(
+            env.iter()
+                .filter(|(key, _)| key == "HOME" || key == "TMPDIR")
+                .all(|(_, value)| value == "/scratch")
+        );
+    }
+
+    /// the vault and its key are never where the agent cell can
+    /// see them; a directory beside the socket's is not inside it.
+    #[test]
+    fn the_vault_is_refused_inside_the_directory_the_cell_mounts() {
+        let mut cell = CellConfig::skill("cell-a").unwrap();
+        cell.socket_dir = PathBuf::from("/run/hatchling");
+        let vault = |root: &str, key: &str| crate::VaultConfig {
+            root: PathBuf::from(root),
+            key_file: PathBuf::from(key),
+            grants: Vec::new(),
+        };
+        let refused = |result: Result<(), Error>| match result {
+            Err(Error::InvalidConfig { key, reason }) if reason.contains("/run/hatchling") => key,
+            other => unreachable!("not refused: {other:?}"),
+        };
+        assert_eq!(
+            refused(cell.refuse_vault_in_view(&vault("/run/hatchling/vault", "/srv/key/key"))),
+            "HATCHLING_VAULT_DIR"
+        );
+        assert_eq!(
+            refused(cell.refuse_vault_in_view(&vault("/srv/vault", "/run/hatchling/key"))),
+            "HATCHLING_VAULT_KEY_FILE"
+        );
+        cell.refuse_vault_in_view(&vault("/srv/vault", "/srv/vault.key/key"))
+            .unwrap();
+        cell.refuse_vault_in_view(&vault("/run/hatchling-vault", "/run/hatchling-key/key"))
+            .unwrap();
+    }
+}

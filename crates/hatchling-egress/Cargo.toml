@@ -1,0 +1,43 @@
+[package]
+name = "hatchling-egress"
+version = "0.1.0"
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+publish.workspace = true
+authors.workspace = true
+repository.workspace = true
+description = "Egress proxy: surrogate-validated, allowlisted outbound network access. The agent never touches the network or holds real credentials."
+
+[lints]
+workspace = true
+
+[dependencies]
+thiserror = "2"
+tracing = "0.1"
+# The shared contract: protocol types, peer credentials.
+hatchling-core = { version = "0.1.0", path = "../hatchling-core" }
+# The vault: surrogate minting reads grant metadata; the proxy swaps
+# surrogates for real credentials at request time.
+hatchling-vault = { version = "0.1.0", path = "../hatchling-vault" }
+# Memory hygiene for surrogate HMAC keys and swapped credentials.
+zeroize = "1"
+# CSPRNG for surrogate HMAC key generation.
+getrandom = "0.4"
+# HMAC for surrogate authentication: surrogates are
+# HMAC(key, peer_uid || destination || expiry), so they cannot be
+# forged without the broker's key.
+hmac = "0.12"
+sha2 = "0.10"
+# Base64 for the surrogate wire format.
+base64 = "0.22"
+# The proxy's own HTTPS client. ring is the one crypto backend;
+# the system CA store is never read (webpki-roots is the bundled set).
+rustls = { version = "0.23", default-features = false, features = ["ring", "std", "tls12"] }
+webpki-roots = "1"
+
+[dev-dependencies]
+# The TLS tests build a throwaway CA and certificates in memory on
+# each run, signed with ring (already rustls's backend), so no private key
+# is ever committed. Never in the broker.
+ring = "0.17"

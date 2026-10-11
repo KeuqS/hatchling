@@ -1,0 +1,3 @@
+[workspace]
+members = ["crates/fx-base", "crates/fx-mid", "crates/fx-top"]
+resolver = "2"

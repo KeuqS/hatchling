@@ -1,0 +1,19 @@
+//! Signed skills: the trust core.
+//!
+//! Every skill is signed, sandboxed, and capability-scoped. An unsigned
+//! skill, a tampered skill, or a skill asking for capabilities it wasn't
+//! granted does not run — fail-closed, structurally, not by convention.
+//!
+//! This crate implements the signing + manifest + admission
+//! trust core. The broker verifies signatures before admission; the
+//! cell never self-attests.
+
+mod error;
+mod manifest;
+mod registry;
+mod verify;
+
+pub use error::Error;
+pub use manifest::{Manifest, SIGNING_CONTEXT, SignedManifest};
+pub use registry::{CodeHash, RegisteredSkill, SkillId, SkillRegistry};
+pub use verify::{Admission, check_trust_root, verify_admission};

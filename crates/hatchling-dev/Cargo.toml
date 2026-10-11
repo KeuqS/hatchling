@@ -1,0 +1,48 @@
+[package]
+name = "hatchling-dev"
+version = "0.1.0"
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+publish.workspace = true
+authors.workspace = true
+repository.workspace = true
+description = "Development-only audit and conformance tooling. Never linked into runtime crates."
+
+[lints]
+workspace = true
+
+[[bin]]
+name = "hatchling-dev"
+path = "src/main.rs"
+
+[lib]
+name = "hatchling_dev"
+path = "src/lib.rs"
+
+[dependencies]
+thiserror = "2"
+# TOML parsing for manifest and toolchain-pin audits.
+# Reviewed: docs/dependency-review.md
+toml = "0.8"
+# Parsing cargo-mutants' outcomes.json for the kill-rate floor.
+# Reviewed: docs/dependency-review.md
+serde_json = "1"
+# Bounded process supervision for the cargo-driver: pidfd
+# waits, process-group kill, validated pids. Workspace crate, not an
+# external dependency; dev-only direction (dev -> sys) is allowed by
+# the dep_direction guard.
+hatchling-sys = { version = "0.1.0", path = "../hatchling-sys" }
+# Parsing Rust sources for the mutation pre-flight gate:
+# functions, their lines, and the calls in their bodies. Already in
+# the lockfile (proc-macro dependencies use it); dev-only here.
+# Reviewed: docs/dependency-review.md
+syn = { version = "2", default-features = false, features = ["full", "parsing", "visit"] }
+# Line numbers for syn's spans outside a proc-macro (`span-locations`).
+# Already in the lockfile. Reviewed: docs/dependency-review.md
+proc-macro2 = { version = "1", default-features = false, features = ["span-locations"] }
+# The wire types the frontend protocol schema is generated from,
+# with their `schema` feature on: dev-only, so no runtime binary builds it.
+hatchling-core = { version = "0.1.0", path = "../hatchling-core", features = ["schema"] }
+# The generator for that schema. Reviewed: docs/dependency-review.md
+schemars = { version = "1", default-features = false, features = ["std"] }

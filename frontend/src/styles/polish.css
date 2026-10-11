@@ -1,0 +1,122 @@
+/* Revision 8 — native, accessible text sizing. Never scale/zoom the document or the canvas. */
+:root { --ui-scale: 1.12; --ui-space: 1.08; }
+:root[data-interface-size='compact'] { --ui-scale: 1; --ui-space: 1; }
+:root[data-interface-size='large'] { --ui-scale: 1.25; --ui-space: 1.16; }
+:root { --rail-width: calc(72px * var(--ui-space)); --context-width: calc(360px * var(--ui-space)); --nav-width: calc(240px * var(--ui-space)); }
+.app-shell.route-library { --rail-width: calc(72px * var(--ui-space)); }
+.navigation-panel { flex-basis: var(--nav-width); width: var(--nav-width); }
+.nav-search-button { min-height: calc(36px * var(--ui-space)); }
+.chat-nav-row { min-height: calc(37px * var(--ui-space)); }
+.chat-nav-title { line-height: 1.35; }
+.main-chat-link { min-height: calc(36px * var(--ui-space)); }
+.side-chat-heading { min-height: calc(36px * var(--ui-space)); height: auto; }
+.icon-rail .icon-button, .icon-rail .rail-more > summary { width: calc(44px * var(--ui-space)); height: calc(44px * var(--ui-space)); }
+.rail-primary { gap: calc(12px * var(--ui-space)); }
+.rail-more > summary { border-radius: 50%; display: grid; place-items: center; padding: 0; color: var(--text); }
+.rail-more > summary > svg { display: block; width: 24px; height: 24px; stroke-width: 1.5; }
+.rail-more > summary:hover, .rail-more[open] > summary { background: var(--surface-raised); }
+.rail-more > summary:active { transform: scale(.94); }
+.rail-more > summary { transition: background-color 130ms ease, transform 140ms ease; }
+.composer { min-height: calc(58px * var(--ui-space)); }
+.composer textarea { line-height: 1.4; }
+.composer .icon-button { width: 38px; height: 38px; }
+.composer .send-button { width: 36px; height: 36px; }
+.chat-column { max-width: calc(768px * var(--ui-space)); }
+.bubble.agent-bubble { max-width: calc(600px * var(--ui-space)); }
+.settings-dialog { width: min(calc(800px * var(--ui-space)), calc(100vw - 48px)); max-width: calc(800px * var(--ui-space)); height: min(calc(720px * var(--ui-space)), calc(100dvh - 64px)); }
+.settings-layout { grid-template-columns: calc(224px * var(--ui-space)) minmax(0, 1fr); }
+.settings-nav .button { min-height: calc(36px * var(--ui-space)); }
+.settings-pane-heading { padding-block: 0 20px; }
+.settings-pane-heading h2 { line-height: 1.35; }
+.settings-pane[data-section='general'] { padding-top: 56px; }
+.settings-pane .general-stack { gap: 26px; }
+.settings-pane .settings-note { line-height: 1.55; }
+.interface-size-section { display: flex; flex-direction: column; gap: 8px; }
+.interface-size-group { display: grid; grid-template-columns: repeat(3,minmax(0,1fr)); gap: 4px; padding: 5px; background: var(--settings-card); border-radius: 16px; }
+.interface-size-option { display: flex; flex-direction: column; align-items: center; justify-content: center; gap: 3px; min-height: 64px; border-radius: 12px; background: transparent; color: var(--muted-on-card); padding: 8px 3px; }
+.interface-size-option strong { font-size: calc(13px * var(--ui-scale)); font-weight: 500; }
+.interface-size-option small { font-size: calc(11px * var(--ui-scale)); opacity: .85; }
+.interface-size-option[aria-checked='true'] { background: var(--composer-bg); color: var(--text); }
+.interface-size-option:hover { background: color-mix(in srgb, var(--composer-bg) 60%, transparent); }
+.interface-size-description { font-size: calc(12px * var(--ui-scale)); line-height: 1.5; color: var(--context-muted); }
+.activity-report-pane, .activity-report-pane .markdown { line-height: 1.5; }
+.activity-step { min-height: calc(40px * var(--ui-space)); }
+.activity-timeline time { font-size: calc(11px * var(--ui-scale)); }
+.dock-header { min-height: calc(56px * var(--ui-space)); }
+.editor-reading-column { width: min(100%, calc(780px * var(--ui-space))); }
+.document-workspace .markdown, .document-about .markdown { line-height: 1.55; }
+.document-workspace .markdown pre { line-height: 1.55; }
+/* The Identity reference is a document surface with its rail, not a centered popup. */
+body.artifact-rail-visible.artifact-expanded #app { width: 100%; }
+body.artifact-rail-visible.artifact-expanded .navigation-panel, body.artifact-rail-visible.artifact-expanded .main-region { visibility: hidden; }
+.artifact-dock.dock-keep-rail.dock-expanded { width: calc(100vw - var(--rail-width)); border-left: 0; }
+.identity-document-dock .document-format-toolbar { position: absolute; left: 50%; transform: translateX(-50%); width: max-content; }
+.identity-document-dock .editor-reading-column { padding-top: 74px; }
+.identity-document-dock .document-about { margin-bottom: 52px; border-color: var(--border); }
+.identity-document-dock .document-format-toolbar > .button:not(.primary) { font-size: calc(12px * var(--ui-scale)); }
+/* Short transitions for state changes; background work must never restart an animation. */
+@media (prefers-reduced-motion: no-preference) {
+  .menu-popover:popover-open { animation: menu-reveal 140ms ease-out; transform-origin: top right; }
+  .dialog[open]:not(.activity-dialog):not(.settings-dialog) { animation: surface-reveal 160ms cubic-bezier(.2,.8,.2,1); }
+  .toast { animation: toast-reveal 220ms cubic-bezier(.18,.8,.3,1); }
+  .interface-size-option { transition: background-color 160ms, color 160ms; }
+  .document-format-toolbar .button:active { transform: scale(.96); }
+  @keyframes menu-reveal { from { opacity: 0; translate: 0 4px; } to { opacity: 1; translate: 0 0; } }
+  @keyframes surface-reveal { from { opacity: 0; translate: 0 6px; } to { opacity: 1; translate: 0 0; } }
+  @keyframes toast-reveal { from { opacity: 0; translate: 0 -8px; } to { opacity: 1; translate: 0 0; } }
+}
+@media (max-width: 1100px) {
+  :root { --context-width: 360px; }
+  .settings-layout { grid-template-columns: 210px minmax(0,1fr); }
+}
+@media (max-width: 800px) {
+  :root { --rail-width: 56px; --ui-space: 1; }
+  .app-shell.route-library { --rail-width: 56px; }
+  .navigation-panel { width: min(var(--nav-width), calc(100vw - var(--rail-width))); }
+  .identity-document-dock .document-format-toolbar { position: static; width: auto; transform: none; }
+  .artifact-dock.dock-keep-rail.dock-expanded { width: 100vw; }
+  body.artifact-rail-visible.artifact-expanded .icon-rail { visibility: hidden; }
+}
+@media (max-width: 600px) {
+  /* Phone text is already 16px. Keep the default at that size; Large remains an explicit option. */
+  :root:not([data-interface-size='large']) { --ui-scale: 1; }
+  :root[data-interface-size='large'] { --ui-scale: 1.12; }
+  .settings-dialog { width: calc(100vw - 20px); height: calc(100dvh - 32px); max-height: calc(100dvh - 32px); }
+  .settings-layout { display: flex; }
+  .settings-pane[data-section='general'] { padding-top: 22px; }
+  .interface-size-option strong { font-size: 12px; }
+  .identity-document-dock .editor-reading-column { padding-top: 32px; }
+  .interface-size-option { min-height: 58px; }
+}
+@container artifact (max-width: 780px) {
+  .identity-document-dock .document-format-toolbar { position: static; transform: none; width: auto; }
+}
+@media (prefers-reduced-motion: reduce) {
+  .rail-more > summary, .interface-size-option { transition: none; }
+}
+body.artifact-rail-visible .rail-avatar { left: 50%; transform: translateX(-50%); }
+.identity-document-dock .dock-header-actions .menu > summary { color: var(--context-muted); }
+.agent-request-payload { white-space: pre-wrap; overflow-wrap: anywhere; max-height: 42dvh; font-size: calc(13px * var(--ui-scale)); }
+.agent-review-dialog { max-width: min(620px, calc(100vw - 24px)); }
+.agent-control-dialog { max-width: min(600px, calc(100vw - 24px)); }
+
+/* Revision 10: the profile is a compact typographic lockup, not a page heading. */
+.agent-profile .agent-name { font-size: 23px; line-height: 28px; font-weight: 500; letter-spacing: -.55px; margin: 8px 16px 0; overflow-wrap: anywhere; }
+.agent-profile .agent-status { color: var(--profile-muted); font-size: 18px; line-height: 24px; font-weight: 400; letter-spacing: -.35px; gap: 4px; margin: 0 14px; min-width: 0; white-space: normal; }
+.agent-status-label { min-width: 0; overflow-wrap: anywhere; }
+.agent-status > svg { flex: 0 0 16px; align-self: center; }
+.agent-status.connected > svg { width: 16px; height: 16px; }
+:root[data-interface-size='large'] .agent-profile .agent-name { font-size: 24px; line-height: 30px; }
+:root[data-interface-size='large'] .agent-profile .agent-status { font-size: 20px; line-height: 26px; }
+.agent-profile { flex: 0 0 auto; min-height: 270px; padding-bottom: 42px; }
+@media (max-width: 800px) { .agent-profile { min-height: 256px; } }
+@media (max-width: 600px) { .agent-profile { min-height: 226px; padding-bottom: 34px; } }
+@media (prefers-reduced-motion: no-preference) {
+  .context-close .icon-button { transition: background-color 130ms ease, transform 130ms ease; }
+  .context-close .icon-button:active { transform: scale(.94); }
+  .context-tabs .icon-button:active { scale: .94; }
+  .context-tabs .icon-button { transition: scale 120ms ease, color 120ms ease; }
+}
+
+/* Shared settings glyph: keep the full cog visible in rail, menus and settings nav. */
+.glyph-settings { overflow: visible; }

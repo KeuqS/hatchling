@@ -1,0 +1,31 @@
+[package]
+name = "hatchling-sys"
+version = "0.1.0"
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+publish.workspace = true
+authors.workspace = true
+repository.workspace = true
+description = "The single crate allowed unsafe code: thin safe wrappers for Linux namespaces, mounts, and seccomp-bpf"
+
+[lints]
+workspace = true
+
+[dependencies]
+# Raw fork/execve/prctl: the few syscalls rustix does not wrap.
+# Reviewed in docs/dependency-review.md.
+libc = "0.2"
+# Safe wrappers for unshare, mount, pivot_root. Keeps the handwritten
+# unsafe surface to fork/exec/prctl only.
+# `net`: SCM_RIGHTS fd passing for a cell's relay listener.
+rustix = { version = "0.38", features = ["fs", "mount", "net", "process", "thread"] }
+thiserror = "2"
+
+[dev-dependencies]
+# The seccomp handshake test speaks the real protocol (framing +
+# message types) so it tests the filter, not a hand-rolled byte
+# string. Test-only edge back to hatchling-core; both are reviewed in
+# docs/dependency-review.md.
+hatchling-core = { version = "0.1.0", path = "../hatchling-core" }
+serde_json = "1"

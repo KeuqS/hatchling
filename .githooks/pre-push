@@ -1,0 +1,5 @@
+#!/usr/bin/env bash
+# Pre-push hook: runs the same gate as CI.
+# Enable once per clone: git config core.hooksPath .githooks
+set -euo pipefail
+bash "$(dirname "$0")/../scripts/check.sh"

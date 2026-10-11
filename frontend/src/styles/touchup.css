@@ -1,0 +1,146 @@
+/* Focused example-led touch-up. Native text-size preferences, adapter commands,
+   retained editors and profile motion remain owned by the existing implementation. */
+:root {
+  --rail-width: calc(64px * var(--ui-space));
+  --nav-width: calc(232px * var(--ui-space));
+  --context-width: calc(334px * var(--ui-space));
+  --chat-width: calc(712px * var(--ui-space));
+  --agent-bubble-width: calc(556px * var(--ui-space));
+  --user-bubble-width: calc(482px * var(--ui-space));
+  --compact-card-width: calc(296px * var(--ui-space));
+}
+.app-shell.route-library { --rail-width: calc(64px * var(--ui-space)); }
+/* A quieter rail and denser chat list, without shrinking conversation text. */
+.navigation-panel { padding: 4px 12px 0; }
+.nav-search-trigger { height: 36px; font-size: calc(14px * var(--ui-scale)); }
+.main-chat-link { height: auto; min-height: calc(34px * var(--ui-space)); margin-top: 12px; padding: 8px 12px; font-size: calc(14px * var(--ui-scale)); }
+.chat-nav-row { height: auto; min-height: calc(34px * var(--ui-space)); border-radius: 12px; }
+.chat-nav-title { font-size: calc(14px * var(--ui-scale)); min-height: 34px; padding-block: 8px; }
+.side-chat-disclosure { font-size: calc(14px * var(--ui-scale)); }
+.side-chat-heading { min-height: calc(34px * var(--ui-space)); }
+.icon-rail .icon-button, .icon-rail .rail-more > summary { width: 44px; height: 44px; }
+.rail-primary { gap: 12px; }
+.chat-navigation-pill { font-size: calc(13px * var(--ui-scale)); gap: 7px; padding-inline: 10px 13px; }
+.chat-navigation-glyph { position: relative; }
+.chat-navigation-pill.has-unread .chat-navigation-glyph::after { content: ''; position: absolute; top: 0; right: -1px; width: 6px; height: 6px; border-radius: 50%; background: var(--primary); box-shadow: 0 0 0 2px var(--composer-bg); }
+/* One reading-column width for the transcript and its composer. */
+.chat-view { container: conversation / inline-size; }
+.chat-column { max-width: var(--chat-width); }
+.bubble.agent-bubble { max-width: min(100%, var(--agent-bubble-width)); }
+.bubble.user-bubble { max-width: min(100%, var(--user-bubble-width)); }
+.message-row.agent { width: fit-content; max-width: calc(100% - 92px); }
+.message-row.user { margin-bottom: 28px; }
+.message-row:last-child { margin-bottom: 0; }
+.message-row.agent:has(+ .message-row.agent) > .bubble { border-bottom-left-radius: 6px; }
+.message-row.agent + .message-row.agent > .bubble { border-top-left-radius: 6px; }
+.message-row.agent:has(> .reaction-chip) { margin-bottom: 22px; }
+/* Align the actions to the actual message/card instead of a fixed text-column offset. */
+.message-actions.message-reactions { position: absolute; top: auto; bottom: 7px; left: calc(100% + 8px); right: auto; height: 28px; margin: 0; gap: 0; pointer-events: none; }
+.message-row:hover .message-actions, .message-row:focus-within .message-actions, .message-actions:hover, .message-actions:has(details[open]) { opacity: 1; pointer-events: auto; }
+/* Keep the actions alive while the pointer travels from the bubble to the
+   buttons: hovering the actions (or the invisible bridge over the gap)
+   holds the visible state after .message-row:hover is lost. */
+.message-actions.message-reactions::before { content: ""; position: absolute; top: -4px; bottom: -4px; left: -8px; width: 8px; }
+.message-row.user .message-actions.message-reactions::before { left: 0; right: 0; top: -6px; bottom: auto; width: auto; height: 6px; }
+/* Center the actions on the bubble instead of pinning them to the row bottom.
+   User rows and the browser-session layout keep their own placements. */
+body:not(.has-browser-session) .message-row.agent .message-actions.message-reactions { top: 50%; bottom: auto; transform: translateY(-50%); }
+.kind-attachment .message-actions.message-reactions { left: min(calc(var(--compact-card-width) + 8px), calc(100% + 8px)); }
+.kind-browser .message-actions.message-reactions { left: calc(100% + 8px); }
+.message-row.user .message-actions.message-reactions { left: auto; right: 4px; bottom: -28px; }
+.message-actions .icon-button, .message-actions summary { color: var(--context-muted); }
+.reaction-menu .menu-popover { flex-direction: row; align-items: center; padding: 5px 8px; box-shadow: 0 6px 20px #0003; }
+/* Dashed, full-width decisions belong inside the response, not loose blue chips. */
+.choice-bubble { width: var(--agent-bubble-width); }
+.choice-options { display: flex; flex-direction: column; gap: 8px; margin: 14px 0 3px; }
+.choice-button.button { width: 100%; justify-content: flex-start; min-height: 40px; padding: 9px 11px; border: 1px dashed var(--border-strong); border-radius: 11px; color: var(--text); text-align: left; font-size: inherit; font-weight: 400; line-height: 1.4; }
+.choice-button.button:hover:not(:disabled) { background: var(--surface-raised); box-shadow: none; border-color: var(--context-muted); }
+.choice-button.button.selected { border-style: solid; background: var(--surface-control); }
+.choice-button.selected::after { content: '✓'; margin-left: auto; padding-left: 10px; }
+/* Native compact cards retain their existing actions and source data. */
+.native-file-card.attachment-card { width: var(--compact-card-width); min-height: 64px; padding: 7px 12px; border-radius: 6px 24px 24px 6px; }
+.native-file-open { gap: 12px; }
+.native-file-open strong { font-size: calc(14px * var(--ui-scale)); }
+.native-file-type { font-size: calc(13px * var(--ui-scale)); }
+.chat-browser-card { width: var(--compact-card-width); padding: 14px; border-radius: 22px 22px 22px 6px; }
+.chat-browser-card header { gap: 10px; margin-bottom: 10px; font-size: calc(13px * var(--ui-scale)); line-height: 1.4; }
+.browser-card-glyph { width: 34px; height: 34px; border-radius: 10px; flex-shrink: 0; }
+.open-browser-button.button { min-height: 32px; margin-top: 9px; padding: 6px 12px; font-size: calc(13px * var(--ui-scale)); background: var(--surface-control); color: var(--text); }
+.scheduled-message-card.stream-event { display: flex; flex-direction: column; gap: 12px; width: var(--compact-card-width); max-width: 100%; margin: 0; padding: 14px; border: 0; border-radius: 6px 24px 24px 24px; background: var(--surface); color: var(--text); font-size: calc(16px * var(--ui-scale)); line-height: 1.4; }
+.scheduled-message-card > header { display: flex; align-items: center; gap: 10px; }
+.scheduled-message-card header strong { display: block; font-size: calc(14px * var(--ui-scale)); line-height: 1.4; }
+.scheduled-message-card .eyebrow { font-size: calc(12px * var(--ui-scale)); letter-spacing: 0; font-weight: 400; color: var(--context-muted); }
+.scheduled-evidence-button.button { width: 100%; min-height: 34px; border-radius: 999px; font-size: calc(13px * var(--ui-scale)); }
+.kind-error .stream-event { max-width: 100%; margin: 10px 0; padding: 10px 12px; border-radius: 12px; background: var(--surface); }
+/* The latest-message pill follows the real composer height, even while drafting. */
+.composer-area { position: relative; }
+.composer { min-height: calc(54px * var(--ui-space)); padding: 8px 14px 8px 12px; gap: 9px; }
+.composer .icon-button, .composer > .menu > summary { width: 32px; height: 32px; }
+.composer:focus-within { box-shadow: inset 0 0 0 1px var(--border-strong); }
+.jump-to-latest.icon-button { top: auto; bottom: calc(100% + 12px); left: 50%; width: auto; min-width: 88px; height: 34px; padding: 0 12px; gap: 7px; border: 0; border-radius: 999px; background: var(--text); color: var(--bg); font-size: calc(12px * var(--ui-scale)); font-weight: 500; box-shadow: 0 3px 12px #0002; }
+.jump-to-latest.icon-button > svg { width: 13px; height: 13px; transform: rotate(90deg); }
+.jump-to-latest.icon-button:hover { background: var(--bubble-user); color: var(--bubble-text); }
+/* Keep the existing portrait lockup; simplify the density below it. */
+.context-panel { padding-inline: 16px; }
+.context-tabs { background: var(--surface-raised); }
+.activity-copy strong { font-size: calc(14px * var(--ui-scale)); line-height: 1.4; }
+.activity-copy > span { font-size: calc(13px * var(--ui-scale)); line-height: 1.4; }
+.activity-copy time { font-size: calc(11px * var(--ui-scale)); line-height: 1.4; }
+.context-job-copy > strong, .context-job-copy > span { font-size: calc(14px * var(--ui-scale)); line-height: 1.4; }
+.context-section-heading h3 { font-size: calc(14px * var(--ui-scale)); font-weight: 500; }
+/* Compact, softer dialog chrome, with independent scrolling still intact. */
+.activity-dialog > .dialog-header { flex-basis: 80px; min-height: 80px; padding: 14px 22px; }
+.activity-title-group { gap: 6px; }
+.activity-title-group > h2 { font-size: calc(16px * var(--ui-scale)); line-height: 1.35; }
+.activity-dialog .activity-timeline { background: var(--settings-bg); }
+.timeline-entry.action-record { padding: 8px 10px; gap: 11px; font-size: calc(13px * var(--ui-scale)); line-height: 1.4; }
+.activity-report-pane { padding: 24px 32px 36px; }
+.schedule-detail, .issue-report-dialog { width: min(520px, calc(100vw - 32px)); border: 0; border-radius: 28px; }
+.schedule-detail .dialog-header, .issue-report-dialog .dialog-header { padding: 18px 22px 14px; }
+.schedule-detail .dialog-header h2, .issue-report-dialog .dialog-header h2 { font-size: calc(16px * var(--ui-scale)); }
+.schedule-detail .dialog-header .icon-button, .issue-report-dialog .dialog-header .icon-button { background: var(--composer-bg); }
+.schedule-detail .dialog-body, .issue-report-dialog .dialog-body { padding-inline: 22px; scrollbar-gutter: auto; }
+.schedule-detail .schedule-detail-dates { padding: 14px 0; border-block: 1px solid var(--border); }
+.schedule-detail .action-row { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 8px; }
+.schedule-detail .action-row > .button { min-height: 36px; width: 100%; font-size: calc(12px * var(--ui-scale)); }
+.schedule-detail .action-row > .button.danger { background: color-mix(in srgb, var(--danger) 12%, transparent); }
+.schedule-detail .notice { padding: 0; background: none; font-size: calc(12px * var(--ui-scale)); line-height: 1.5; }
+.issue-report-form { gap: 14px; }
+.issue-report-form > p { font-size: calc(12px * var(--ui-scale)); line-height: 1.5; }
+.issue-report-form input, .issue-report-form textarea { background: var(--surface-control); border-color: transparent; border-radius: 14px; padding: 12px; }
+.issue-report-form textarea[name='description'] { min-height: 180px; }
+.issue-report-form .primary { align-self: stretch; width: 100%; margin-top: 4px; min-height: 38px; }
+/* A narrow conversation can be inside a wide desktop browser. Container-based
+   reflow keeps actions and cards from spilling into either docked workspace. */
+@container conversation (max-width: 760px) {
+  .message-row.agent { max-width: 100%; }
+  .message-actions.message-reactions, .kind-attachment .message-actions.message-reactions, .kind-browser .message-actions.message-reactions, body.has-browser-session .message-actions.message-reactions, body.has-browser-session .kind-browser .message-actions.message-reactions { position: relative; inset: auto; align-self: flex-start; height: 24px; margin-top: -2px; opacity: 1; pointer-events: auto; transform: none; }
+  body:not(.has-browser-session) .message-row.agent .message-actions.message-reactions { inset: auto; transform: none; }
+  .message-actions.message-reactions::before { content: none; }
+  .message-row.user .message-actions.message-reactions, body.has-browser-session .message-row.user .message-actions.message-reactions { position: absolute; inset: auto 4px -28px auto; }
+  .scheduled-message-card.stream-event { font-size: inherit; }
+}
+@media (hover: none) {
+  .message-actions.message-reactions { opacity: 1; pointer-events: auto; }
+}
+@media (max-width: 1100px) {
+  :root { --context-width: 360px; }
+}
+@media (max-width: 800px) {
+  :root { --rail-width: 56px; }
+  .app-shell.route-library { --rail-width: 56px; }
+  .navigation-panel { padding-top: 8px; }
+  .chat-column { padding-inline: 0; }
+  .chat-view:has(> .floating-agent-toggle) .conversation-location { max-width: 100%; }
+  .activity-report-pane { padding: 20px; }
+}
+@media (max-width: 600px) {
+  .composer { min-height: 56px; padding: 6px 10px; gap: 6px; }
+  .composer .icon-button, .composer > .menu > summary { width: 38px; height: 38px; }
+  .choice-button.button { min-height: 44px; }
+  .message-actions .icon-button, .message-actions summary { width: 32px; height: 32px; }
+  .message-actions.message-reactions { height: 32px; }
+  .schedule-detail, .issue-report-dialog { border-radius: 22px; }
+  .schedule-detail .dialog-body, .issue-report-dialog .dialog-body { padding-inline: 18px; }
+  .issue-report-form textarea[name='description'] { min-height: 140px; }
+}

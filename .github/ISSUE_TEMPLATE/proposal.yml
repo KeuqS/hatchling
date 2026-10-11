@@ -1,0 +1,39 @@
+name: Proposal
+description: A feature, or a change to the core. Core work may become a work order.
+labels: [enhancement]
+body:
+  - type: markdown
+    attributes:
+      value: |
+        Core work is planned as [work orders](https://github.com/undergroundrap/hatchling/tree/main/docs/workorders). Describe the problem here; if it's core work, a maintainer turns it into one. Small, focused changes can go straight to a pull request.
+  - type: textarea
+    id: problem
+    attributes:
+      label: The problem
+      description: What's missing or wrong, and why it matters to someone running Hatchling.
+    validations:
+      required: true
+  - type: textarea
+    id: proposal
+    attributes:
+      label: What you propose
+      description: The change, and what would be observably different when it's done.
+    validations:
+      required: true
+  - type: dropdown
+    id: boundary
+    attributes:
+      label: Does it touch the trust boundary?
+      description: Isolation, the vault, egress, grants, authentication or the API.
+      options:
+        - "No"
+        - "Yes"
+        - Not sure
+    validations:
+      required: true
+  - type: checkboxes
+    id: help
+    attributes:
+      label: Contributing
+      options:
+        - label: I'd like to work on this myself.

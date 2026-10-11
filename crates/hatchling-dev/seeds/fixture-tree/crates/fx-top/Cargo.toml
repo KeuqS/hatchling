@@ -1,0 +1,10 @@
+[package]
+name = "fx-top"
+version = "0.1.0"
+edition = "2021"
+
+[dependencies]
+fx-mid = { path = "../fx-mid" }
+
+[dev-dependencies]
+fx-base = { path = "../fx-base" }

@@ -1,0 +1,17 @@
+# Fixed input data for the seed-check fixture: not a real lock file, never
+# built. Its bytes feed `lock_hash`, so it must never change.
+version = 4
+
+[[package]]
+name = "fx-base"
+version = "0.1.0"
+
+[[package]]
+name = "fx-mid"
+version = "0.1.0"
+dependencies = ["fx-base"]
+
+[[package]]
+name = "fx-top"
+version = "0.1.0"
+dependencies = ["fx-base", "fx-mid"]

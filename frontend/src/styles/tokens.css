@@ -1,0 +1,160 @@
+/* Shared design tokens. Both palettes are covered by text/background contrast tests. */
+:root {
+  color-scheme: dark;
+  --bg: #181818;
+  --surface: #202020;
+  --surface-raised: #282828;
+  --surface-control: #424242;
+  --settings-bg: #282828;
+  --settings-card: #414141;
+  --text: #f3f4f5;
+  --muted: #b4b7bc;
+  --muted-on-card: #d1d3d6;
+  --border: #303030;
+  --border-strong: #62666c;
+  --accent: #69baff;
+  --primary: #2496f3;
+  --primary-text: #071523;
+  --bubble-user: #f1f1f1;
+  --bubble-text: #111112;
+  --success: #98d8ba;
+  --danger: #ffb2ac;
+  --attention: #edcb91;
+  --focus: #8ecbff;
+  --paper: #f9fafb;
+  --ink: #24272c;
+  --composer-bg: #323232;
+  --composer-placeholder: #a2a2a5;
+  --context-muted: #979aa0;
+  --profile-muted: #8b8e93;
+  --context-control: #424242;
+  --nav-selected: #262626;
+  --tooltip-bg: #323232;
+  --search-border: #505052;
+  --scroll-thumb: #383839;
+  --connection-green: #07b123;
+  --avatar-base: #ffffff;
+  --shadow: 0 24px 90px #00000066;
+  --font-ui: 'Roboto', 'Segoe UI', Arial, sans-serif;
+  --font-mono: ui-monospace, 'SFMono-Regular', Consolas, monospace;
+  --rail-width: 72px;
+  --nav-width: 240px;
+  --context-width: 360px;
+}
+:root[data-theme='light'] {
+  color-scheme: light;
+  --bg: #ffffff;
+  --surface: #f1f2f4;
+  --surface-raised: #e9ebee;
+  --surface-control: #e4e7eb;
+  --settings-bg: #f9fafb;
+  --settings-card: #eceef1;
+  --text: #22252a;
+  --muted: #5c626d;
+  --muted-on-card: #515864;
+  --border: #e0e3e7;
+  --border-strong: #828997;
+  --accent: #005eae;
+  --primary: #0071cd;
+  --primary-text: #ffffff;
+  --bubble-user: #e4e7eb;
+  --bubble-text: #22252a;
+  --success: #236342;
+  --danger: #a32324;
+  --attention: #765312;
+  --focus: #0064b8;
+  --composer-bg: #e4e7eb;
+  --composer-placeholder: #62656b;
+  --context-muted: #5c626d;
+  --profile-muted: #5c626d;
+  --context-control: #d7dade;
+  --nav-selected: #e9ebee;
+  --tooltip-bg: #eceef1;
+  --search-border: #b4b7bc;
+  --scroll-thumb: #b4b7bc;
+  --connection-green: #14762c;
+  --shadow: 0 24px 90px #1b243b24;
+}
+@media (prefers-color-scheme: light) {
+  :root:not([data-theme='dark']):not([data-theme='light']) {
+    color-scheme: light;
+    --bg: #ffffff;
+    --surface: #f1f2f4;
+    --surface-raised: #e9ebee;
+    --surface-control: #e4e7eb;
+    --settings-bg: #f9fafb;
+    --settings-card: #eceef1;
+    --text: #22252a;
+    --muted: #5c626d;
+    --muted-on-card: #515864;
+    --border: #e0e3e7;
+    --border-strong: #828997;
+    --accent: #005eae;
+    --primary: #0071cd;
+    --primary-text: #ffffff;
+    --bubble-user: #e4e7eb;
+    --bubble-text: #22252a;
+    --success: #236342;
+    --danger: #a32324;
+    --attention: #765312;
+    --focus: #0064b8;
+    --composer-bg: #e4e7eb;
+  --composer-placeholder: #62656b;
+  --context-muted: #5c626d;
+  --profile-muted: #5c626d;
+  --context-control: #d7dade;
+  --nav-selected: #e9ebee;
+  --tooltip-bg: #eceef1;
+  --search-border: #b4b7bc;
+  --scroll-thumb: #b4b7bc;
+  --connection-green: #14762c;
+  --shadow: 0 24px 90px #1b243b24;
+  }
+}
+/* Shared additions, 1.11.0. Existing component geometry is intentionally retained.
+   STYLE_GUIDE.md explains the historical cascade and where to extend it. */
+:root {
+  --space-1: calc(4px * var(--ui-space, 1));
+  --space-2: calc(8px * var(--ui-space, 1));
+  --space-3: calc(12px * var(--ui-space, 1));
+  --space-4: calc(16px * var(--ui-space, 1));
+  --space-6: calc(24px * var(--ui-space, 1));
+  --space-8: calc(32px * var(--ui-space, 1));
+  --space-12: calc(48px * var(--ui-space, 1));
+  --radius-xs: 6px;
+  --radius-sm: 10px;
+  --radius-md: 14px;
+  --radius-lg: 18px;
+  --radius-xl: 24px;
+  --radius-pill: 999px;
+  --text-xs: calc(12px * var(--ui-scale, 1));
+  --text-sm: calc(14px * var(--ui-scale, 1));
+  --text-body: calc(16px * var(--ui-scale, 1));
+  --text-title: calc(20px * var(--ui-scale, 1));
+  --control-touch: 44px;
+  --motion-fast: 140ms;
+  --motion-standard: 180ms;
+  --motion-ease: cubic-bezier(.2, .8, .2, 1);
+  --skeleton-base: color-mix(in srgb, var(--text) 13%, var(--bg));
+  --skeleton-line-height: calc(12px * var(--ui-scale, 1));
+  --skeleton-title-height: calc(17px * var(--ui-scale, 1));
+  --skeleton-avatar-size: calc(40px * var(--ui-space, 1));
+  --skeleton-pulse-duration: 1800ms;
+  --loading-reveal-delay: 120ms;
+}
+
+/* Shared action menus, 1.12.0. The existing More menu is the reference. */
+:root {
+  --menu-bg: var(--composer-bg);
+  --menu-border: var(--border);
+  --menu-hover: color-mix(in srgb, var(--text) 7%, var(--menu-bg));
+  --menu-shadow: 0 8px 20px color-mix(in srgb, var(--bg) 20%, transparent);
+  --menu-radius: var(--radius-lg);
+  --menu-item-radius: var(--radius-sm);
+  --menu-padding: 8px;
+  --menu-min-width: calc(240px * var(--ui-space, 1));
+  --menu-item-height: calc(36px * var(--ui-space, 1));
+  --menu-icon-size: 16px;
+  --menu-gap: 10px;
+  --menu-divider: color-mix(in srgb, var(--text) 13%, var(--menu-bg));
+}

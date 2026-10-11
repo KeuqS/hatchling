@@ -1,0 +1,165 @@
+<p align="center">
+  <img src="assets/hatchling-logo.png" alt="Hatchling: a chick hatching from an egg" width="200">
+</p>
+
+<h1 align="center">Hatchling</h1>
+
+<p align="center"><strong>Personal AI agents you actually own.</strong></p>
+
+<p align="center">
+  <a href="LICENSE"><img alt="License: AGPL-3.0-or-later" src="https://img.shields.io/badge/license-AGPL--3.0--or--later-blue.svg"></a>
+  <a href="https://github.com/undergroundrap/hatchling/actions/workflows/ci.yml"><img alt="Gate" src="https://img.shields.io/github/actions/workflow/status/undergroundrap/hatchling/ci.yml?branch=main&amp;label=gate"></a>
+  <a href="rust-toolchain.toml"><img alt="Rust 1.85+" src="https://img.shields.io/badge/rust-1.85%2B-orange.svg"></a>
+  <a href="docs/arch/trust-boundary.md#requirements"><img alt="Platform: Linux 5.11+ or WSL2" src="https://img.shields.io/badge/platform-Linux%205.11%2B%20%7C%20WSL2-lightgrey.svg"></a>
+  <a href="CONTRIBUTING.md"><img alt="PRs welcome" src="https://img.shields.io/badge/PRs-welcome-brightgreen.svg"></a>
+</p>
+
+An always-on agent that lives on your machine, thinks with the model you choose, works while you're away — and is built so it **cannot** see your keys, read your files, or reach the internet unless you granted exactly that.
+
+Hatchling is open source (AGPL-3.0-or-later), written in Rust, and pre-1.0.
+
+---
+
+## Why Hatchling
+
+Always-on personal agents are arriving everywhere. Almost all of them run on someone else's servers: your prompts, your files and your credentials live under their terms, and the safety model is a policy you can't inspect.
+
+Hatchling is the other option: **the agent runs on hardware you control, and the safety model is the architecture, not a promise.**
+
+### Isolation is built in, not bolted on
+
+Most agent frameworks start with a powerful agent and add guardrails around it. Hatchling starts with the boundary and gives the agent only what you grant:
+
+- **Every agent runs in a cell**: its own Linux user, mount, PID, network and IPC namespaces, a seccomp-BPF syscall allowlist, every capability dropped, and one way to talk: a session with the broker, admitted by kernel peer credentials. The agent is the process *inside* the cell; there is no unsandboxed mode. If the kernel can't build a cell, Hatchling refuses to start rather than run without one.
+- **Your keys never enter the cell.** Credentials live in a local vault, sealed at rest (XChaCha20-Poly1305), unlockable by key file, authenticator codes or a FIDO2 security key, with backup codes. When the agent calls an API, the egress proxy swaps a broker-minted surrogate for the real credential at the boundary, so the agent can *use* a service without ever *holding* the key. (A `vault:fetch:<name>` grant can hand over one named secret, deliberately; nothing else can.)
+- **No network by default.** A cell has an empty network namespace. It reaches the outside only through the broker's egress proxy, per grant, against an exact-match allowlist. Each session pins the addresses a destination resolves to; remote hosts are reached only over TLS, which checks the hostname before a byte is sent, and a local model port must resolve to loopback.
+- **The broker checks who's calling before reading a byte.** Every connection is identified by the kernel's peer credentials, and every request is checked against that caller's grants.
+- **Untrusted text stays untrusted.** Tool output reaches the model inside an untrusted-data envelope it can't close early. Everything sent to you passes an output gate that redacts held secrets and private keys, and state-changing actions go through confirmation rails.
+
+The full model, what it deliberately doesn't cover, and the gaps our own pre-launch review found are in **[the trust boundary](docs/arch/trust-boundary.md)**. Each gap is a [work order](docs/workorders/README.md), open to contributors.
+
+## What it can do today
+
+| | |
+| --- | --- |
+| **Your model** | Any OpenAI-compatible chat-completions endpoint: Ollama, llama.cpp, LM Studio and vLLM locally, or a hosted API. Every secret a run fetches is redacted from what it sends, local endpoint or not. |
+| **Coding harnesses** | Claude Code and Codex CLI, pinned to a SHA-256 and verified before they run, inside cells. |
+| **Scheduling** | Cron or one-off tasks in explicit IANA timezones; each schedule runs with exactly the grants it was created with. |
+| **Memory and goals** | Broker-owned durable memory and goal tracking, paged so no reply outgrows its frame. |
+| **Feed** | A scheduled digest of your own records: what changed in your goals, tracking and tagged memory. |
+| **Skills** | Signed, verified skill packages, each run in a dedicated cell scoped to its declared capabilities. |
+| **Artifacts and research** | Documents and pages made by signed builder skills, inspected at the boundary before they reach you; deep-research runs that deliver a cited report. |
+| **Spaces** | Shared, persistent scopes with members and devices. |
+| **Local API** | A Unix-socket JSON API with a generated JSON Schema, for your own clients and integrations: **[docs/local-api.md](docs/local-api.md)**. |
+| **Frontend** | A TypeScript UI. It runs on scripted data today; its live adapter is built and tested, and wiring it to the local API is open work. |
+
+**Platforms:** Linux (kernel 5.11+, unprivileged user namespaces). On Windows, use WSL2 — you get the Hyper-V boundary underneath the cells. macOS: the isolation layer is a platform-neutral trait, but there is no macOS backend yet.
+
+## How it works
+
+```
+            you ──► local API (Unix socket, JSON) ──┐
+                                                    ▼
+ ┌─────────────────── broker (on your machine, as root) ────────────────────┐
+ │  peer-credential gate · grants · scheduler · memory · goals · audit log  │
+ │                                                                          │
+ │   vault (sealed at rest)          egress proxy (allowlist, key swap)     │
+ │        ▲  keys stay here               ▲  the only way out               │
+ └────────┼───────────────────────────────┼─────────────────────────────────┘
+          │ grants, checked per request   │ surrogate tokens, never real keys
+ ┌────────┴───────────────────────────────┴─────────┐
+ │  cell: namespaces · seccomp · no capabilities    │
+ │        empty network · read-only view            │
+ │                                                  │
+ │   agent loop · skills · harness CLIs · your code │
+ └──────────────────────────────────────────────────┘
+```
+
+The **broker** is the trusted side: it owns the vault, the proxy, the schedules and the API, and it never executes untrusted code. Everything the model drives runs in a **cell**. Where each piece lives: **[module map](docs/arch/module-map.md)** · **[protocol](docs/arch/protocol.md)** · **[session protocol](docs/session-protocol.md)**.
+
+## Quickstart
+
+**Requirements:** Linux 5.11+ with unprivileged user namespaces and seccomp-BPF (or WSL2); Rust (the pinned 1.98.1 installs itself through `rust-toolchain.toml`; the minimum supported is 1.85); a C compiler; Python 3 for the examples; root, for the reason [below](#running-without-root).
+
+Build, install the two binaries, and create the user the cells run as: a system user nothing else runs as.
+
+```bash
+git clone https://github.com/undergroundrap/hatchling
+cd hatchling
+cargo build --release
+sudo install -m 755 target/release/hatchling-broker target/release/hatchling-agent /usr/local/bin/
+sudo useradd --system --user-group --no-create-home --shell /usr/sbin/nologin hatchling-cell
+```
+
+Give cells a uid of their own, never `nobody` or any uid another process uses: the broker admits an agent by its uid, so any process with that uid could act as the agent.
+
+The rest runs as root (`sudo -s`, still in the clone). Configure the broker: where it keeps its state, which uid its cells get, and the one network destination a cell may reach, the model:
+
+```bash
+export HATCHLING_HOME=/var/lib/hatchling
+mkdir -p -m 700 "$HATCHLING_HOME"/{sock,vault,schedules}
+export HATCHLING_BROKER_SOCKET=$HATCHLING_HOME/sock/broker.sock
+export HATCHLING_AGENT_UID=$(id -u hatchling-cell)   # cells run as hatchling-cell
+export HATCHLING_CELL_UID_BASE=$HATCHLING_AGENT_UID
+export HATCHLING_AGENT_BIN=/usr/local/bin/hatchling-agent
+export HATCHLING_CELL_ID=cell-01
+export HATCHLING_VAULT_DIR=$HATCHLING_HOME/vault
+export HATCHLING_SCHEDULER_DIR=$HATCHLING_HOME/schedules
+export HATCHLING_CHANNEL_INGRESS=$HATCHLING_HOME/ingress.sock
+export HATCHLING_API_SOCKET=$HATCHLING_HOME/api.sock
+export HATCHLING_SCHEDULER_MODEL_ENDPOINT=http://localhost:18089/v1
+export HATCHLING_SCHEDULER_MODEL_NAME=stand-in
+export HATCHLING_EGRESS_ALLOWLIST=local-keyless:localhost:18089
+export HATCHLING_EGRESS_GRANTS=localhost:18089
+export HATCHLING_API_GRANTS=egress:localhost:18089,channel-send:local
+```
+
+Start a stand-in for a model server, seal the vault, and start the broker:
+
+```bash
+python3 docs/examples/stand-in-model.py 18089 &
+hatchling-broker migrate-vault
+hatchling-broker &
+```
+
+Give the agent its first task:
+
+```bash
+python3 docs/examples/first-run.py "$HATCHLING_API_SOCKET" 18089
+```
+
+```text
+scheduled for 14:07 UTC: Introduce yourself in one sentence.
+waiting for the agent (one to three minutes)...
+agent: Hello from inside a Hatchling cell. This answer came from the stand-in model; ...
+```
+
+That answer took the whole path: the scheduler started a fresh cell as `hatchling-cell`, the agent in it checked that the model can call tools, asked it the task through the egress proxy (the cell's only way out), and replied on the local channel, back through the API to you.
+
+**A real model:** run one locally with an OpenAI-compatible API (Ollama, llama.cpp, LM Studio, vLLM), and use its port and model name instead. For Ollama: `http://localhost:11434/v1`, `local-keyless:localhost:11434`, `localhost:11434`, and `egress:localhost:11434` in the API grants. A guide for hosted APIs, whose key the vault holds, is part of [WO-001](docs/workorders/workorder-001-help-and-tested-quickstart.md).
+
+### Running without root
+
+The broker runs as root so that each cell can get a uid of its own. Without privilege, Linux lets a process map only its own uid into a user namespace, so an unprivileged broker's cells run as you: still in their own namespaces, under seccomp, with no capabilities and no network. In that mode, the local API and the chat ingress refuse to start, because a cell with your uid could otherwise drive them. Making both work without root is a [work-order candidate](docs/workorders/README.md#candidates).
+
+From here: **[the local API](docs/local-api.md)** for every action and event, and **[testing on WSL2](docs/testing-on-wsl2.md)** for a Windows setup.
+
+## Held to a high bar
+
+- Over 2,300 tests (1,983 Rust, 397 frontend), including real-kernel cell tests that fail rather than skip when isolation is unavailable (`HATCHLING_REQUIRE_CELL=1`).
+- Mutation testing with a kill floor of 1.0: every mutant of changed code is killed by a test or proven equivalent in writing.
+- `unsafe` lives in exactly one crate (`hatchling-sys`), each block justified; every other crate denies it.
+- Strict clippy: pedantic and nursery lints, with `unwrap`, `expect`, `panic`, indexing and `as` casts denied in production code. Plus `cargo deny`, a written review of every dependency ([docs/dependency-review.md](docs/dependency-review.md)), and CI on the pinned toolchain and the 1.85 MSRV.
+- The docs that describe the wire format are checked against the types: if they drift, the build fails.
+
+## Contributing
+
+PRs are welcome. Read **[CONTRIBUTING.md](CONTRIBUTING.md)** first: the bar is mutation evidence and a green gate, and it's written down so you can meet it.
+
+Core work is planned as **work orders**, specs in **[docs/workorders/](docs/workorders/)** that say exactly what done means. Eleven are queued, most of them security hardening from the pre-launch review. Pick one up, or open an issue to propose one. Frontend changes follow `frontend/STYLE_GUIDE.md`.
+
+Everyone here follows the **[code of conduct](CODE_OF_CONDUCT.md)**. Found a security problem? Please don't open a public issue — see **[SECURITY.md](SECURITY.md)**.
+
+## License
+
+AGPL-3.0-or-later. See [LICENSE](LICENSE).

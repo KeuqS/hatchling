@@ -1,0 +1,92 @@
+{
+  "files": {
+    "crates/fx-base/Cargo.toml": {
+      "key": {
+        "config_hash": "",
+        "env_id": "HATCHLING_REQUIRE_CELL=1",
+        "file_hash": "c3b73c1d7df355abf934fa87a40ebbe54cb6d63e204adb538ae863ab05dc1fa1",
+        "lock_hash": "e0aac70528184d7a2c21fadafe69674965b65892ea77ced1a32d8f20e9f4f23d",
+        "suite_hash": "4cb08256b0658b029b4ba48a513e1f4d50a6bd4a9573fcfccfb083958efd01f0",
+        "toolchain_id": ""
+      },
+      "package": "fx-base"
+    },
+    "crates/fx-base/src/lib.rs": {
+      "key": {
+        "config_hash": "",
+        "env_id": "HATCHLING_REQUIRE_CELL=1",
+        "file_hash": "9fd206ca05ed5b7ef08b2679cdeb3994a48a713c16223b258c78b838d1857138",
+        "lock_hash": "e0aac70528184d7a2c21fadafe69674965b65892ea77ced1a32d8f20e9f4f23d",
+        "suite_hash": "4cb08256b0658b029b4ba48a513e1f4d50a6bd4a9573fcfccfb083958efd01f0",
+        "toolchain_id": ""
+      },
+      "package": "fx-base"
+    },
+    "crates/fx-mid/Cargo.toml": {
+      "key": {
+        "config_hash": "",
+        "env_id": "HATCHLING_REQUIRE_CELL=1",
+        "file_hash": "b35a6156b034b4465a9acdfc11941e5c892bfd6f5ac8d72e769367d30e09844f",
+        "lock_hash": "e0aac70528184d7a2c21fadafe69674965b65892ea77ced1a32d8f20e9f4f23d",
+        "suite_hash": "dd523bff620ab683fa0116f5eb427771d7d70f9578980139369aaac80762a27e",
+        "toolchain_id": ""
+      },
+      "package": "fx-mid"
+    },
+    "crates/fx-mid/src/inner/mod.rs": {
+      "key": {
+        "config_hash": "",
+        "env_id": "HATCHLING_REQUIRE_CELL=1",
+        "file_hash": "3fdca2ad2ce630dd69076e33492d49dea7bdadb6ad60d316091fe5696b7cb1a4",
+        "lock_hash": "e0aac70528184d7a2c21fadafe69674965b65892ea77ced1a32d8f20e9f4f23d",
+        "suite_hash": "dd523bff620ab683fa0116f5eb427771d7d70f9578980139369aaac80762a27e",
+        "toolchain_id": ""
+      },
+      "package": "fx-mid"
+    },
+    "crates/fx-mid/src/lib.rs": {
+      "key": {
+        "config_hash": "",
+        "env_id": "HATCHLING_REQUIRE_CELL=1",
+        "file_hash": "30ac5367e8cd592b80612899378163abd94169fa7bce7f86c5f21b41a2e74f96",
+        "lock_hash": "e0aac70528184d7a2c21fadafe69674965b65892ea77ced1a32d8f20e9f4f23d",
+        "suite_hash": "dd523bff620ab683fa0116f5eb427771d7d70f9578980139369aaac80762a27e",
+        "toolchain_id": ""
+      },
+      "package": "fx-mid"
+    },
+    "crates/fx-top/Cargo.toml": {
+      "key": {
+        "config_hash": "",
+        "env_id": "HATCHLING_REQUIRE_CELL=1",
+        "file_hash": "a66ca57c0dca3653b1487ef385de465ab562d84f9d93e4428639ecb22052d581",
+        "lock_hash": "e0aac70528184d7a2c21fadafe69674965b65892ea77ced1a32d8f20e9f4f23d",
+        "suite_hash": "54cc6b2e2aeaea9ace1172e027aa61a847fef304c54586800ff6b6345865eae0",
+        "toolchain_id": ""
+      },
+      "package": "fx-top"
+    },
+    "crates/fx-top/src/lib.rs": {
+      "key": {
+        "config_hash": "",
+        "env_id": "HATCHLING_REQUIRE_CELL=1",
+        "file_hash": "a75c0cb6f49987c4f45e4b72e8b17b9e7b6ae9005e594aa825022020a5975d21",
+        "lock_hash": "e0aac70528184d7a2c21fadafe69674965b65892ea77ced1a32d8f20e9f4f23d",
+        "suite_hash": "54cc6b2e2aeaea9ace1172e027aa61a847fef304c54586800ff6b6345865eae0",
+        "toolchain_id": ""
+      },
+      "package": "fx-top"
+    },
+    "crates/fx-top/tests/it.rs": {
+      "key": {
+        "config_hash": "",
+        "env_id": "HATCHLING_REQUIRE_CELL=1",
+        "file_hash": "723acd87db4a69bfac99dd48eeea74830d67b4e7158a4570e45fbc84f5a5dc69",
+        "lock_hash": "e0aac70528184d7a2c21fadafe69674965b65892ea77ced1a32d8f20e9f4f23d",
+        "suite_hash": "54cc6b2e2aeaea9ace1172e027aa61a847fef304c54586800ff6b6345865eae0",
+        "toolchain_id": ""
+      },
+      "package": "fx-top"
+    }
+  }
+}

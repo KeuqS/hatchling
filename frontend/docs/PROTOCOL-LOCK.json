@@ -1,0 +1,36 @@
+{
+  "schemaVersion": 1,
+  "product": "hatchling-frontend",
+  "baseline": "v8 / 1.7.0",
+  "adapterExport": "ProtocolAdapter",
+  "entry": "src/protocol/models.ts",
+  "files": {
+    "src/protocol/codec.ts": "a1270292f3f6cf55c7718e400b8b5bf0e42c0ff1c1556c7c450a3dc9fcb851ad",
+    "src/protocol/identity-document.ts": "401cb95b852cb78e8119d85971286fe141533f94666fe6a5d3e65607734f0924",
+    "src/protocol/models.ts": "42f626e570f79c2082ac8adbab279a9164319e716df549c7581afa00036c146c",
+    "src/protocol/rules.ts": "6ae575eed661d202f316ec911d1787cb0b2c2a0b084946d8177dd00f887a4bfa"
+  },
+  "history": [
+    {
+      "date": "2026-09-25",
+      "file": "src/protocol/models.ts",
+      "from": null,
+      "to": "d13291d7de1d9e7a82a743e1c39ab8353ca225b925114849e42889baaca0d66d",
+      "change": "Re-baselined to the delivered 1.12.0 content; no v8 copy existed to diff against."
+    },
+    {
+      "date": "2026-10-07",
+      "file": "src/protocol/models.ts",
+      "from": "d13291d7de1d9e7a82a743e1c39ab8353ca225b925114849e42889baaca0d66d",
+      "to": "ecfd10b2ef80496dd3f427fcb19f4b6a294eaf4464525f79854321277d68d0a4",
+      "change": "Verdict gains 'interrupted' and 'partial': a killed subagent is not a failed one, and a partial result is not a success."
+    },
+    {
+      "date": "2026-10-07",
+      "file": "src/protocol/models.ts",
+      "from": "ecfd10b2ef80496dd3f427fcb19f4b6a294eaf4464525f79854321277d68d0a4",
+      "to": "42f626e570f79c2082ac8adbab279a9164319e716df549c7581afa00036c146c",
+      "change": "BrowserTask.controller gains 'switching': while control changes hands nobody drives, and the browser views say so."
+    }
+  ]
+}

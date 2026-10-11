@@ -1,0 +1,158 @@
+/* Revision 6: reference settings navigation, running evidence, and reversible agent presence. */
+/* Settings keeps one stable shell. Each nested view owns its content and scroll. */
+.settings-dialog { height: min(720px, calc(100dvh - 64px)); }
+.settings-pane { padding: 20px 24px 30px; scrollbar-gutter: auto; }
+.settings-pane-heading { display: flex; align-items: center; gap: 12px; padding-right: 30px; margin: 0 0 22px; min-height: 24px; }
+.settings-pane-heading h2 { font-size: calc(18px * var(--ui-scale, 1)); line-height: calc(24px * var(--ui-scale, 1)); font-weight: 600; letter-spacing: -.45px; margin: 0; outline: none; }
+.settings-pane-heading.is-nested { margin-left: -8px; min-height: 28px; margin-bottom: 16px; }
+.settings-back.icon-button { width: 28px; height: 28px; flex: 0 0 28px; border-radius: 50%; background: var(--settings-card); }
+.settings-back svg { transform: rotate(180deg); width: 16px; height: 16px; }
+.settings-pane[data-section='general'] > .settings-pane-heading { display: none; }
+.settings-nav { padding-top: 18px; }
+.settings-nav-title { padding-bottom: 20px; font-size: calc(18px * var(--ui-scale, 1)); letter-spacing: -.4px; }
+.settings-nav .button { min-height: 32px; line-height: calc(20px * var(--ui-scale, 1)); font-size: calc(14px * var(--ui-scale, 1)); padding: 6px 12px; }
+.settings-nav .button svg { width: 16px; height: 16px; flex-shrink: 0; }
+.settings-nav-bottom .button { color: var(--text); background: transparent; }
+.settings-stack { gap: 24px; }
+.settings-intro { font-size: calc(14px * var(--ui-scale, 1)); line-height: calc(21px * var(--ui-scale, 1)); color: var(--text); margin: 0; }
+.settings-section-title { font-size: calc(14px * var(--ui-scale, 1)); line-height: calc(20px * var(--ui-scale, 1)); font-weight: 600; color: var(--context-muted); margin: 0 0 6px; }
+.reference-list { padding: 4px 18px; border-radius: 18px; overflow: visible; }
+.reference-setting-row { display: flex; align-items: center; gap: 10px; min-height: 46px; padding: 8px 0; border: 0; border-radius: 0; background: transparent; color: var(--text); font: 400 calc(14px * var(--ui-scale, 1))/calc(20px * var(--ui-scale, 1)) var(--font-ui); text-align: left; width: 100%; }
+.reference-setting-row + .reference-setting-row { border-top: 1px solid var(--border-strong); }
+button.reference-setting-row { cursor: pointer; position: relative; }
+button.reference-setting-row:hover { background: #ffffff08; }
+.reference-setting-row > svg { flex-shrink: 0; color: var(--context-muted); }
+.setting-row-copy { display: flex; flex-direction: column; flex: 1; min-width: 0; overflow-wrap: anywhere; }
+.setting-description { display: block; font-size: calc(12px * var(--ui-scale, 1)); line-height: calc(17px * var(--ui-scale, 1)); color: var(--muted-on-card); margin-top: 2px; }
+.setting-empty { color: var(--context-muted); text-align: center; padding: 28px 0; font-size: calc(14px * var(--ui-scale, 1)); }
+.provider-mark { display: grid; place-items: center; width: 28px; height: 28px; flex-shrink: 0; border-radius: 7px; overflow: hidden; background: var(--bg); }
+.provider-mark img { width: 100%; height: 100%; object-fit: contain; }
+.provider-mark > svg { color: var(--text); }
+.settings-pane .reference-setting-row .button.link { color: var(--feed-link); font-size: calc(14px * var(--ui-scale, 1)); padding: 6px 8px; min-height: 30px; font-weight: 400; }
+.connector-search { display: flex; gap: 10px; align-items: center; min-height: 44px; border-radius: 25px; background: var(--settings-card); padding: 0 16px; color: var(--context-muted); }
+.connector-search input { width: 100%; min-width: 0; border: 0; background: transparent; padding: 11px 0; border-radius: 0; font-size: calc(14px * var(--ui-scale, 1)); color: var(--text); outline: none; }
+.connector-search:focus-within { outline: 2px solid var(--feed-link); outline-offset: 2px; }
+.connector-results { display: flex; flex-direction: column; gap: 24px; }
+.connector-detail { padding: 22px; display: flex; flex-direction: column; gap: 16px; }
+.wallet-methods .provider-mark { width: 32px; height: 32px; }
+.wallet-method.unavailable .provider-mark { opacity: .5; }
+.wallet-method.unavailable { color: var(--muted-on-card); }
+.coming-soon { color: var(--muted-on-card); font-size: calc(14px * var(--ui-scale, 1)); flex-shrink: 0; }
+.reference-wallet { min-height: 460px; }
+.settings-sample-options { font-size: calc(12px * var(--ui-scale, 1)); color: var(--context-muted); margin-top: auto; padding-top: 18px; }
+.settings-sample-options summary { cursor: pointer; }
+.settings-sample-options p { margin-top: 10px; }
+.secure-store-intro { display: flex; justify-content: space-between; align-items: center; gap: 14px; font-size: calc(14px * var(--ui-scale, 1)); line-height: calc(21px * var(--ui-scale, 1)); }
+.secure-store-intro > .button.primary { flex-shrink: 0; color: #07121c; background: var(--feed-link); border-radius: 99px; font-weight: 400; min-height: 32px; padding: 6px 14px; font-size: calc(14px * var(--ui-scale, 1)); }
+.credential-form { display: flex; flex-direction: column; gap: 12px; }
+.credential-fields { padding: 6px 18px; }
+.credential-row { display: grid; grid-template-columns: minmax(90px, 1fr) minmax(0, 256px); gap: 12px; align-items: center; min-height: 52px; font-size: calc(14px * var(--ui-scale, 1)); }
+.credential-row + .credential-row { border-top: 1px solid var(--border-strong); }
+.credential-row input { width: 100%; height: 36px; border: 1px solid transparent; border-radius: 12px; background: var(--bg); font-size: calc(14px * var(--ui-scale, 1)); padding: 7px 10px; min-width: 0; }
+.credential-row input:focus { outline: none; border-color: var(--feed-link); }
+.credential-password { position: relative; }
+.credential-password input { padding-right: 40px; }
+.credential-password .icon-button { width: 32px; height: 32px; position: absolute; right: 3px; top: 2px; }
+.credential-password .icon-button svg { width: 16px; height: 16px; }
+.credential-form .dialog-actions { margin-top: 0; padding: 0; }
+.credential-form .button { border-radius: 22px; font-size: calc(14px * var(--ui-scale, 1)); min-height: 36px; font-weight: 400; }
+.credential-form .primary { background: var(--feed-link); color: #081218; }
+.credential-safety { color: var(--context-muted); font-size: calc(11px * var(--ui-scale, 1)); line-height: calc(16px * var(--ui-scale, 1)); margin-top: 14px; }
+.credential-form > .button.link { align-self: flex-start; font-size: calc(12px * var(--ui-scale, 1)); padding-left: 0; color: var(--feed-link); }
+.permissions-stack { gap: 24px; }
+.permission-choices { padding-block: 5px; }
+.permission-choice { min-height: 50px; gap: 14px; }
+.permission-choice > svg { color: var(--text); margin-right: 2px; }
+.permission-choice .setting-description { font-size: calc(12px * var(--ui-scale, 1)); }
+.permission-count { color: var(--muted-on-card); margin-left: auto; }
+.permission-navigation { min-height: 46px; }
+.permission-navigation > svg { width: 15px; }
+.website-permission { min-height: 53px; gap: 12px; }
+.website-icon { display: grid; place-items: center; background: var(--surface-raised); color: var(--context-muted); width: 28px; height: 28px; border-radius: 7px; flex-shrink: 0; }
+.website-permission .setting-row-copy { font-size: calc(14px * var(--ui-scale, 1)); line-height: calc(20px * var(--ui-scale, 1)); }
+.settings-group .website-policy { width: 80px; min-width: 76px; font-size: calc(14px * var(--ui-scale, 1)); padding: 8px 0; background: transparent; color: var(--text); }
+.website-policy option { background: var(--settings-card); }
+.network-permissions { padding: 4px 18px; }
+.network-toggle { display: flex; gap: 10px; min-height: 58px; padding: 9px 0; }
+.network-toggle + .network-toggle { border-top: 1px solid var(--border-strong); }
+.network-toggle > svg { flex: 0 0 17px; color: var(--text); }
+.network-toggle .row-title { font-size: calc(14px * var(--ui-scale, 1)); line-height: calc(20px * var(--ui-scale, 1)); font-weight: 400; }
+.network-toggle .row-description { font-size: calc(12px * var(--ui-scale, 1)); line-height: calc(17px * var(--ui-scale, 1)); color: var(--muted-on-card); }
+.network-toggle .toggle { flex-shrink: 0; width: 36px; height: 22px; }
+.network-toggle .toggle-track { background: var(--surface-raised); }
+.network-toggle input:checked + .toggle-track { background: var(--feed-link); }
+.network-toggle .row-copy { flex: 1; min-width: 0; }
+.support-links { display: flex; flex-direction: column; padding: 12px; align-items: flex-start; }
+.shortcut-list { display: flex; flex-direction: column; gap: 0; }
+.shortcut-list > div { display: flex; justify-content: space-between; align-items: center; gap: 20px; padding: 12px 0; border-bottom: 1px solid var(--border); }
+.shortcut-list kbd { color: var(--context-muted); font: calc(12px * var(--ui-scale, 1))/calc(18px * var(--ui-scale, 1)) var(--font-ui); }
+/* Four real entries in the bottom rail menu, with the final one separated. */
+/* Running indicators carry lifecycle, not an invented successful result. */
+@keyframes activity-spin { to { transform: rotate(360deg); } }
+.activity-icon.is-running > svg, .activity-spinner > svg, .agent-status.working > svg { animation: activity-spin 1.5s linear infinite; transform-origin: center; }
+.activity-spinner { display: grid; place-items: center; color: var(--context-muted); flex: 0 0 19px; }
+.timeline-entry.pending-entry { min-height: 50px; }
+.pending-entry .activity-spinner { color: var(--text); }
+.timeline-working { display: flex; align-items: center; gap: 12px; padding: 8px 12px; font-size: calc(13px * var(--ui-scale, 1)); color: var(--context-muted); }
+.activity-title-group .pill.in-progress { background: #fff; color: #161616; font-size: calc(12px * var(--ui-scale, 1)); line-height: calc(16px * var(--ui-scale, 1)); padding: 1px 10px; border-radius: 6px; }
+.pending-report-status { font-size: calc(12px * var(--ui-scale, 1)); color: var(--context-muted); margin-top: 24px; }
+.context-section-heading { display: flex; align-items: center; justify-content: space-between; }
+.context-section-heading .menu { opacity: 0; }
+.context-section-heading:hover .menu, .context-section-heading:focus-within .menu { opacity: 1; }
+.context-section-heading .icon-button { width: 24px; height: 24px; }
+/* Closing the context panel relocates the avatar; no top-right text button is substituted. */
+.chat-toolbar .chat-title, .chat-toolbar .demo-button { display: none; }
+.chat-toolbar { pointer-events: none; }
+.chat-toolbar > .icon-button { pointer-events: auto; }
+.floating-agent-toggle { position: absolute; top: 7px; left: 50%; transform: translateX(-50%); z-index: 20; border: 0; background: var(--avatar-base); padding: 0; width: 54px; height: 54px; border-radius: 50%; cursor: pointer; box-shadow: 0 3px 10px #0002; overflow: hidden; }
+.floating-agent-toggle img { display: block; width: 100%; height: 100%; border-radius: 50%; object-fit: cover; background: var(--avatar-base); transition: box-shadow 150ms; }
+.floating-agent-toggle:hover img { box-shadow: 0 0 0 3px var(--surface-control); }
+.floating-agent-toggle:focus:not(:focus-visible) { outline: none; }
+.context-close .icon-button { border-radius: 50%; transition: background 140ms; }
+.context-close .icon-button:hover { background: var(--surface-raised); }
+.avatar-edit-menu { position: absolute; right: -1px; bottom: -4px; }
+.avatar-edit-menu > summary.avatar-edit { position: static; width: 34px; height: 34px; border-radius: 50%; background: var(--surface-raised); border: 2px solid var(--bg); }
+.avatar-edit-menu > summary.avatar-edit:hover { background: var(--surface-control); }
+.avatar-picker-preview { border-radius: 50%; object-fit: cover; align-self: center; background: var(--avatar-base); }
+.agent-transition-ghost { position: fixed; object-fit: cover; border-radius: 50%; z-index: 90; pointer-events: none; background: var(--avatar-base); }
+@media (max-width: 800px) { .settings-pane { padding-inline: 20px; } .settings-layout { grid-template-columns: 180px minmax(0,1fr); } }
+@media (max-width: 600px) {
+    .settings-dialog { height: calc(100dvh - 32px); }
+    .settings-pane { padding: 22px 16px 30px; }
+    .settings-nav { padding-top: 52px; }
+    .settings-pane-heading { padding-right: 0; margin-bottom: 18px; }
+    .settings-pane-heading h2 { font-size: calc(17px * var(--ui-scale, 1)); }
+    .reference-list { padding-inline: 12px; }
+    .credential-row { grid-template-columns: minmax(70px, 1fr) minmax(0, 1.5fr); gap: 8px; }
+    .credential-fields { padding-inline: 12px; }
+    .secure-store-intro { align-items: flex-start; }
+    .website-permission { flex-wrap: wrap; column-gap: 8px; }
+    .website-permission .setting-row-copy { flex-basis: calc(100% - 40px); }
+    .website-permission select { margin-left: auto; }
+    .network-permissions { padding-inline: 12px; }
+    .network-toggle { gap: 8px; }
+    .network-toggle > svg { display: none; }
+    .network-toggle .row-description { font-size: calc(11px * var(--ui-scale, 1)); }
+    .reference-wallet { min-height: 0; }
+    .floating-agent-toggle { top: 5px; width: 42px; height: 42px; }
+    .context-section-heading .menu { opacity: 1; }
+}
+@media (prefers-reduced-motion: reduce) {
+    .activity-icon.is-running > svg, .activity-spinner > svg, .agent-status.working > svg { animation: none; }
+    .floating-agent-toggle img, .context-close .icon-button { transition: none; }
+}
+/* The delegated tooltip rule must not turn the relocated avatar back into a flow item. */
+button.floating-agent-toggle { position: absolute; }
+.settings-nav .button.active { background: var(--settings-card); }
+.network-toggle > span:not(.toggle) { flex: 1; min-width: 0; }
+.network-toggle .text-small { max-width: none; }
+.timeline-entry.pending-entry { position: relative; display: flex; align-items: flex-start; width: 100%; gap: 10px; padding: 10px 9px; margin: 0; border: 0; border-radius: 12px; overflow: visible; text-align: left; font-size: calc(14px * var(--ui-scale, 1)); line-height: calc(19px * var(--ui-scale, 1)); font-weight: 400; color: var(--text); background: transparent; }
+.timeline-entry.pending-entry.selected { background: var(--bg); }
+.timeline-entry.pending-entry .activity-spinner { margin-top: 1px; }
+.timeline-mark.failed { color: var(--context-muted); border: 1px solid var(--context-muted); }
+.timeline-mark.failed svg { width: 9px; height: 9px; }
+@media (max-width:600px) { .timeline-entry.pending-entry { font-size: calc(13px * var(--ui-scale, 1)); line-height: calc(18px * var(--ui-scale, 1)); } }
+
+/* Keep the nested Back control reachable while the settings content scrolls. */
+.settings-pane-heading { position: sticky; top: 0; z-index: 2; background: var(--settings-bg); box-shadow: 0 -22px 0 var(--settings-bg); }
+.settings-dialog > .dialog-header { z-index: 5; }

@@ -1,0 +1,25 @@
+[package]
+name = "hatchling-model"
+version = "0.1.0"
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+publish.workspace = true
+authors.workspace = true
+repository.workspace = true
+description = "A real model provider for the agent loop: OpenAI-compatible chat-completions translation behind an injected transport. The crate never opens a socket; the host supplies HTTP through the broker-mediated egress path."
+
+[lints]
+workspace = true
+
+[dependencies]
+hatchling-loop = { version = "0.1.0", path = "../hatchling-loop" }
+hatchling-prompt = { version = "0.1.0", path = "../hatchling-prompt" }
+thiserror = "2"
+serde_json = "1"
+# Secrets registered for redaction are zeroized on drop.
+zeroize = "1"
+# NOTE: endpoint parsing is hand-rolled (see endpoint.rs) instead of the
+# `url` crate. The provider only needs scheme/authority/path splitting
+# for https URLs, and the workspace's cargo-deny discipline keeps the
+# dependency tree minimal.

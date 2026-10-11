@@ -1,0 +1,25 @@
+[package]
+name = "hatchling-isolation"
+version = "0.1.0"
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+publish.workspace = true
+authors.workspace = true
+repository.workspace = true
+description = "The isolation seam: one platform-neutral trait between broker policy and a platform's cell mechanism, and its Linux backend"
+
+[lints]
+workspace = true
+
+[dependencies]
+# The Linux backend's every OS call goes through the sanctioned unsafe
+# crate; this crate has no unsafe of its own. Reviewed in
+# docs/dependency-review.md.
+hatchling-sys = { version = "0.1.0", path = "../hatchling-sys" }
+thiserror = "2"
+
+[dev-dependencies]
+# Test-only cleanup of a leaked test child without going through the
+# supervision under test (as the broker's cell tests did before ).
+rustix = { version = "0.38", features = ["process"] }

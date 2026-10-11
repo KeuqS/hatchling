@@ -1,0 +1,200 @@
+/* Revision 5: continuous panel motion, viewport-safe overlays and a persistent artifact workspace. */
+:root { --artifact-width: min(980px, 52vw); --panel-ease: cubic-bezier(.2,.8,.2,1); }
+/* Dialog chrome is fixed; content owns scrolling. No header or footer needs to be cropped. */
+.dialog { margin: auto; max-height: calc(100dvh - 48px); overflow: hidden; }
+.dialog[open] { display: flex; flex-direction: column; }
+.dialog > .dialog-header { flex-shrink: 0; }
+.dialog > .dialog-body { flex: 1 1 auto; min-height: 0; overscroll-behavior: contain; scrollbar-gutter: stable; }
+.dialog-header h2 { min-width: 0; overflow-wrap: anywhere; }
+.dialog-header .icon-button { flex-shrink: 0; }
+.dialog:not(.search-dialog):not(.settings-dialog):not(.activity-dialog) > .dialog-body { padding-bottom: 28px; }
+.activity-dialog { width: min(1320px, calc(100vw - 64px)); max-width: 1320px; height: min(880px, calc(100dvh - 64px)); max-height: calc(100dvh - 64px); margin: auto; border-radius: 30px; }
+.activity-dialog > .dialog-header { flex-basis: 88px; padding: 18px 24px; }
+.activity-dialog > .dialog-body { scrollbar-gutter: auto; }
+.activity-split { grid-template-columns: clamp(300px, 30%, 380px) minmax(0, 1fr); }
+.activity-report-pane { padding: 24px 40px 40px; font-size: calc(15px * var(--ui-scale, 1)); line-height: calc(22px * var(--ui-scale, 1)); scrollbar-gutter: stable; }
+.activity-report-pane .markdown { font-size: calc(15px * var(--ui-scale, 1)); line-height: calc(22px * var(--ui-scale, 1)); }
+.activity-file-card { width: 340px; }
+.activity-timeline { padding: 16px 12px 28px; }
+/* One continuous pill, no button background swaps. Selection is local, not a shell render. */
+.context-tabs { position: relative; isolation: isolate; display: flex; padding: 4px; }
+.context-tabs .context-tab-indicator { position: absolute; left: 4px; top: 4px; bottom: 4px; width: calc((100% - 8px) / 4); background: var(--surface-control); border-radius: 999px; pointer-events: none; transition: transform 240ms var(--panel-ease); }
+.context-tabs .icon-button, .context-tabs .icon-button.active, .context-tabs .icon-button:hover { position: relative; z-index: 1; flex: 1 1 0; width: auto; background: transparent; }
+/* Portal tooltips and menus sit above clipping and stacking contexts, including native dialogs. */
+.portal-tooltips [data-tooltip]::after { display: none !important; }
+.floating-tooltip { position: fixed; inset: auto; margin: 0; border: 0; max-width: min(280px, calc(100vw - 16px)); width: max-content; padding: 7px 10px; border-radius: 8px; color: var(--text); background: var(--composer-bg); box-shadow: 0 6px 22px #0004; font: 500 calc(12px * var(--ui-scale, 1))/calc(17px * var(--ui-scale, 1)) var(--font-ui); overflow-wrap: anywhere; pointer-events: none; z-index: 1000; }
+.floating-tooltip::backdrop { background: transparent; pointer-events: none; }
+.floating-tooltip.fallback-visible { display: block; }
+.menu-popover[popover] { position: fixed !important; inset: auto !important; margin: 0 !important; top: var(--floating-top, 8px) !important; left: var(--floating-left, 8px) !important; max-height: calc(100dvh - 16px); max-width: calc(100vw - 16px); overflow-y: auto; z-index: 100; }
+.menu-popover[popover]::backdrop { background: transparent; pointer-events: none; }
+/* Settings: space above the account and below Appearance, fixed title/close clearance. */
+.settings-dialog { width: min(800px, calc(100vw - 48px)); max-width: 800px; height: min(720px, calc(100dvh - 64px)); max-height: calc(100dvh - 64px); border-radius: 32px; }
+.settings-dialog > .dialog-header { top: 16px; right: 16px; }
+.settings-dialog > .dialog-body { flex: 1; scrollbar-gutter: auto; }
+.settings-layout { grid-template-columns: 224px minmax(0, 1fr); min-height: 0; }
+.settings-nav { padding: 22px 14px 20px; min-height: 0; }
+.settings-nav-title { padding: 0 8px 24px; }
+.settings-nav-bottom { padding-top: 22px; }
+.settings-pane { padding: 24px 24px 32px; min-height: 0; scrollbar-gutter: stable; scroll-padding-block: 24px; overscroll-behavior: contain; }
+.settings-pane[data-section='general'] { padding-top: 54px; }
+.settings-pane > h2 { margin-bottom: 22px; padding-right: 36px; }
+.settings-pane .account-card { margin: 0; }
+.settings-pane .settings-note { padding: 0 2px; }
+.settings-stack > * { flex-shrink: 0; }
+.settings-dialog .dialog-header .icon-button { width: 28px; height: 28px; background: var(--composer-bg); }
+.data-controls-stack { gap: 24px; }
+.privacy-card { display: flex; gap: 16px; align-items: flex-start; padding: 17px 18px; }
+.privacy-card > svg { margin-top: 2px; flex-shrink: 0; }
+.privacy-card strong { font-size: calc(14px * var(--ui-scale, 1)); line-height: calc(20px * var(--ui-scale, 1)); font-weight: 500; }
+.privacy-card p { font-size: calc(12px * var(--ui-scale, 1)); line-height: calc(17px * var(--ui-scale, 1)); color: var(--muted-on-card); }
+.privacy-card .button { padding: 0; min-height: 18px; font-size: calc(12px * var(--ui-scale, 1)); color: var(--feed-link); }
+.data-toggle-card { padding: 5px 18px; }
+.data-toggle-card .toggle-row { min-height: 54px; }
+.data-toggle-card .row-title { font-size: calc(14px * var(--ui-scale, 1)); }
+.data-description { padding: 8px 12px 0; font-size: calc(13px * var(--ui-scale, 1)); line-height: calc(19px * var(--ui-scale, 1)); color: var(--context-muted); }
+.data-links-card { padding: 4px 18px; }
+.data-navigation-row.button { display: flex; justify-content: space-between; width: 100%; font-size: calc(14px * var(--ui-scale, 1)); line-height: calc(20px * var(--ui-scale, 1)); padding: 14px 0; border-radius: 0; background: transparent; text-align: left; font-weight: 400; }
+.data-navigation-row + .data-navigation-row { border-top: 1px solid var(--border-strong); }
+.data-navigation-row > svg { color: var(--context-muted); flex-shrink: 0; }
+.data-reset-card { padding: 0 18px; }
+.data-reset-card .button.danger { width: 100%; justify-content: flex-start; padding: 18px 0; color: #ff5268; background: none; font-size: calc(14px * var(--ui-scale, 1)); font-weight: 400; }
+.data-advanced { margin-top: 2px; font-size: calc(12px * var(--ui-scale, 1)); color: var(--context-muted); }
+.data-advanced summary { cursor: pointer; }
+/* Persistent right workspace; no backdrop and no nested artifact modal. */
+#app { width: 100%; height: 100dvh; transition: width 280ms var(--panel-ease); }
+body.has-artifact-dock #app { width: calc(100% - var(--artifact-width)); }
+body.has-artifact-dock .context-panel, body.has-artifact-dock .context-backdrop { display: none; }
+body.has-artifact-dock .chat-toolbar { position: relative; inset: auto; height: 48px; min-height: 48px; background: var(--bg); opacity: 1; pointer-events: auto; padding: 6px 16px; }
+body.has-artifact-dock .chat-toolbar .demo-button { display: none; }
+body.has-artifact-dock .chat-column { max-width: 780px; padding: 0; }
+body.has-artifact-dock .chat-scroll { padding-left: 28px; padding-right: 28px; mask-image: none; }
+body.has-artifact-dock .composer-area { width: calc(100% - 48px); }
+body.has-artifact-dock .bubble { max-width: 100%; }
+body.has-artifact-dock .page { width: 100%; margin-inline: auto; }
+.artifact-dock { position: fixed; inset: 0 0 0 auto; margin: 0; width: var(--artifact-width); max-width: 100vw; height: 100dvh; max-height: 100dvh; border: 0; border-left: 1px solid var(--border); border-radius: 0; padding: 0; background: var(--bg); color: var(--text); box-shadow: -12px 0 30px #0001; overflow: hidden; z-index: 65; container: artifact / inline-size; transition: width 280ms var(--panel-ease); }
+.artifact-dock[open] { display: flex; flex-direction: column; }
+.artifact-dock.dock-expanded { width: 100vw; border-left: 0; }
+.dock-header { display: flex; align-items: center; justify-content: space-between; flex: 0 0 auto; gap: 12px; min-height: 56px; padding: 8px 18px; border-bottom: 1px solid var(--border); background: var(--bg); }
+.dock-name { display: flex; align-items: center; gap: 9px; min-width: 0; }
+.dock-name h2 { font-size: calc(15px * var(--ui-scale, 1)); font-weight: 600; overflow: hidden; white-space: nowrap; text-overflow: ellipsis; }
+.dock-header .icon-button { height: 32px; width: 32px; flex: 0 0 32px; color: var(--context-muted); border-radius: 8px; }
+.dock-header .icon-button:hover { color: var(--text); background: var(--surface-raised); }
+.dock-header-actions { display: flex; align-items: center; gap: 4px; margin-left: auto; flex-shrink: 0; }
+.dock-body { flex: 1; min-height: 0; overflow-y: auto; overflow-x: hidden; scrollbar-gutter: stable; overscroll-behavior: contain; }
+.artifact-dock .viewer-toolbar { position: sticky; top: 0; padding: 14px 24px; min-height: 58px; background: var(--bg); z-index: 2; flex-wrap: wrap; gap: 8px; }
+.artifact-dock .viewer-toolbar .button { font-size: calc(12px * var(--ui-scale, 1)); min-height: 30px; padding: 6px 12px; border-radius: 18px; }
+.artifact-dock .viewer-content { padding: 24px 28px 48px; overflow: visible; }
+.artifact-dock .document-tools { position: relative; margin-bottom: 18px; }
+.artifact-dock .document-paper { background: none; padding: 16px 0; border-radius: 0; }
+.artifact-dock .document-layout { gap: 20px; }
+.artifact-dock .document-outline { flex-basis: 130px; }
+.artifact-dock .page-artifact .document-paper { padding: 30px; background: var(--paper); border-radius: 14px; }
+.artifact-dock .code-paper { min-width: 0; }
+.code-document { font: calc(13px * var(--ui-scale, 1))/calc(22px * var(--ui-scale, 1)) var(--font-mono); white-space: pre-wrap; overflow-wrap: anywhere; padding: 20px 12px; background: var(--surface); border-radius: 12px; counter-reset: code-line; }
+.code-document code { font: inherit; padding: 0; background: none; }
+.code-line { display: block; padding-left: 38px; position: relative; min-height: 22px; }
+.code-line::before { content: attr(data-line); position: absolute; left: 0; width: 24px; text-align: right; color: var(--context-muted); font-size: calc(10px * var(--ui-scale, 1)); user-select: none; }
+.code-line.search-match { background: var(--surface-control); }
+/* Document workspace: the SOUL reference's quiet, centered reading column and format bar. */
+.document-format-toolbar { display: flex; justify-content: center; align-items: center; gap: 10px; flex: 1; min-width: 0; }
+.format-buttons { display: flex; align-items: center; gap: 2px; }
+.format-buttons .button { min-width: 28px; min-height: 28px; padding: 4px 6px; font-size: calc(11px * var(--ui-scale, 1)); color: var(--context-muted); border-radius: 5px; }
+.format-buttons .format-bold { font-weight: 700; font-size: calc(16px * var(--ui-scale, 1)); }
+.format-buttons .format-italic { font-family: Georgia, serif; font-style: italic; font-size: calc(16px * var(--ui-scale, 1)); margin-right: 5px; }
+.format-buttons .format-h1, .format-buttons .format-bullet { border-left: 1px solid var(--border-strong); border-radius: 0; padding-left: 10px; }
+.document-format-toolbar > .button { font-size: calc(11px * var(--ui-scale, 1)); padding: 5px 8px; min-height: 28px; white-space: nowrap; }
+.editor-reading-column { width: min(100%, 780px); margin: 0 auto; padding: 76px 28px 80px; }
+.document-about { font-style: italic; border-left: 3px solid var(--border-strong); padding-left: 15px; margin-bottom: 56px; }
+.document-about .markdown { font-size: calc(16px * var(--ui-scale, 1)); line-height: calc(24px * var(--ui-scale, 1)); }
+.document-workspace .markdown { font-size: calc(16px * var(--ui-scale, 1)); line-height: calc(26px * var(--ui-scale, 1)); }
+.document-workspace .markdown > h1 { font-size: calc(30px * var(--ui-scale, 1)); line-height: calc(38px * var(--ui-scale, 1)); font-weight: 600; letter-spacing: -.5px; margin: 0 0 8px; }
+.document-workspace .markdown > * + * { margin-top: 12px; }
+.document-workspace .markdown li + li { margin-top: 0; }
+.document-workspace .markdown li { padding-left: 0; margin: 0; }
+.direct-markdown.markdown-editor { width: 100%; min-height: min(600px, 70dvh); padding: 12px 0; border: 0; border-radius: 0; font: calc(14px * var(--ui-scale, 1))/calc(24px * var(--ui-scale, 1)) var(--font-mono); background: transparent; resize: vertical; }
+.direct-markdown:focus { outline-offset: 8px; }
+.draft-status { font-size: calc(12px * var(--ui-scale, 1)); color: var(--context-muted); margin: 0 0 12px; }
+/* Disclosure rows keep folders in place; nested entries share the same column tracks. */
+.system-table tr { position: relative; }
+.system-table tr.system-selected { background: var(--composer-bg); }
+.system-table tr.system-selected td:first-child { border-radius: 15px 0 0 15px; }
+.system-table tr.system-selected td:last-child { border-radius: 0 15px 15px 0; }
+.system-table .system-cell { display: flex; align-items: center; min-width: 0; padding-left: calc(var(--tree-depth, 0) * 20px); }
+.system-table .system-cell .system-entry { flex: 1; min-width: 0; }
+.system-table .system-entry > span:last-child { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.system-table .folder-open-link { opacity: 0; flex-shrink: 0; width: 28px; height: 28px; color: var(--context-muted); }
+.system-table tr:hover .folder-open-link, .system-table tr:focus-within .folder-open-link { opacity: 1; }
+.system-table .document-file-icon { color: var(--context-muted); background: var(--surface-raised); }
+.system-entry[aria-expanded='true'] .system-file-icon { color: #51aaff; background: #2496f32b; }
+@container artifact (max-width: 720px) {
+    .dock-header { flex-wrap: wrap; gap: 6px; }
+    .document-format-toolbar { order: 3; flex-basis: 100%; justify-content: flex-start; padding-top: 5px; border-top: 1px solid var(--border); }
+    .document-format-toolbar > .button:first-of-type { margin-left: auto; }
+    .editor-reading-column { padding: 36px 24px 60px; }
+    .artifact-dock .document-outline { display: none; }
+    .artifact-dock .slides-layout { display: flex; flex-direction: column; }
+    .artifact-dock .slides-layout > * { width: 100%; }
+}
+@container artifact (max-width: 400px) {
+    .format-h2, .format-h3 { display: none; }
+    .document-format-toolbar { gap: 3px; flex-wrap: wrap; }
+    .document-format-toolbar:has(.primary) .format-buttons { flex: 1 0 100%; }
+    .format-buttons { gap: 0; }
+    .format-buttons .button { min-width: 25px; }
+    .editor-reading-column { padding: 26px 20px 48px; }
+    .document-about { margin-bottom: 28px; }
+    .artifact-dock .viewer-content { padding: 16px 18px 36px; }
+    .artifact-dock .viewer-toolbar { padding: 12px 18px; }
+}
+@media (max-width: 1650px) {
+    body.has-artifact-dock .navigation-panel { position: fixed; z-index: 50; left: var(--rail-width); top: 0; bottom: 0; box-shadow: 16px 0 30px #0003; background: var(--bg); }
+}
+@media (max-width: 1100px) {
+    .activity-split { grid-template-columns: minmax(250px, 33%) minmax(0, 1fr); }
+    .activity-report-pane { padding: 24px 28px 36px; }
+}
+@media (max-width: 1000px) {
+    :root { --artifact-width: 100vw; }
+    body.has-artifact-dock #app { width: 100%; }
+    .artifact-dock { border-left: 0; width: 100vw; }
+}
+@media (max-width: 800px) {
+    .settings-layout { grid-template-columns: 180px minmax(0, 1fr); }
+    .settings-nav { padding-inline: 10px; }
+    .activity-dialog { width: calc(100vw - 32px); }
+    .activity-split { grid-template-columns: 245px minmax(0, 1fr); }
+    .activity-report-pane { padding-inline: 22px; }
+}
+@media (max-width: 600px) {
+    .dialog { max-height: calc(100dvh - 32px); }
+    .activity-dialog { width: calc(100vw - 20px); height: calc(100dvh - 32px); max-height: calc(100dvh - 32px); margin: auto; border-radius: 22px; }
+    .activity-dialog > .dialog-header { min-height: 88px; flex-basis: 88px; padding: 14px 16px; }
+    .activity-split { grid-template-columns: minmax(0, 1fr); grid-template-rows: minmax(110px, 34%) minmax(0, 1fr); }
+    .activity-report-pane { padding: 20px 18px 32px; }
+    .settings-dialog { width: calc(100vw - 20px); height: calc(100dvh - 32px); max-height: calc(100dvh - 32px); border-radius: 22px; }
+    .settings-layout { display: flex; flex-direction: column; }
+    .settings-nav { padding: 52px 14px 12px; }
+    .settings-nav-title { top: 18px; left: 20px; }
+    .settings-pane, .settings-pane[data-section='general'] { padding: 22px 16px 30px; }
+    .settings-dialog > .dialog-header { top: 13px; right: 13px; }
+    .data-controls-stack { gap: 20px; }
+    .privacy-card { gap: 12px; padding: 16px; }
+    .settings-pane .privacy-card .button { margin: 0; }
+    .dock-header { padding: 8px 12px; }
+    .document-tools { flex-wrap: wrap; }
+    .document-tools input { width: 100%; }
+}
+@media (prefers-reduced-motion: reduce) {
+    #app, .artifact-dock, .context-tabs .context-tab-indicator { transition: none; }
+}
+
+.data-toggle-card .toggle-track { background: var(--surface-raised); }
+
+@media (min-width: 801px) {
+    .app-shell.route-library { --rail-width: 72px; }
+    .system-page { width: min(1156px, calc(100% - 96px)); padding-top: 32px; }
+    .memory-dock .dock-body { scrollbar-gutter: stable both-edges; }
+    .system-page h1 { font-size: calc(34px * var(--ui-scale, 1)); line-height: calc(43px * var(--ui-scale, 1)); }
+    .system-page > .page-header { margin-bottom: 27px; }
+    .system-table td { height: 49px; }
+}

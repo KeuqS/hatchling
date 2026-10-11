@@ -1,0 +1,103 @@
+/* All ordinary popup action lists share the approved More-menu surface.
+   The compact horizontal reaction picker is a deliberately different control. */
+.menu:not(.reaction-menu) > .menu-popover {
+  width: max-content;
+  min-width: min(var(--menu-min-width), calc(100vw - 16px));
+  max-width: min(calc(360px * var(--ui-space, 1)), calc(100vw - 16px));
+  padding: var(--menu-padding);
+  gap: 0;
+  border: 1px solid var(--menu-border);
+  border-radius: var(--menu-radius);
+  background: var(--menu-bg);
+  color: var(--text);
+  box-shadow: var(--menu-shadow);
+  font-family: var(--font-ui);
+  isolation: isolate;
+  overscroll-behavior: contain;
+  overflow-x: hidden;
+}
+.menu:not(.reaction-menu) > .menu-popover > .button {
+  display: flex;
+  align-items: center;
+  justify-content: flex-start;
+  flex: 0 0 auto;
+  width: 100%;
+  min-width: 0;
+  min-height: var(--menu-item-height);
+  gap: var(--menu-gap);
+  padding: 8px 10px;
+  margin: 0;
+  border: 0;
+  border-radius: var(--menu-item-radius);
+  background: transparent;
+  color: var(--text);
+  text-align: left;
+  white-space: normal;
+  font-family: var(--font-ui);
+  font-size: var(--text-sm);
+  font-weight: 400;
+  line-height: calc(20px * var(--ui-scale, 1));
+  transition: background-color var(--motion-fast) var(--motion-ease);
+}
+.menu:not(.reaction-menu) > .menu-popover > .button:hover:not(:disabled),
+.menu:not(.reaction-menu) > .menu-popover > .button:focus-visible {
+  background: var(--menu-hover);
+}
+.menu:not(.reaction-menu) > .menu-popover > .button:focus-visible {
+  outline: 2px solid var(--focus);
+  outline-offset: -2px;
+}
+.menu:not(.reaction-menu) > .menu-popover > .button.danger { color: var(--danger); }
+.menu:not(.reaction-menu) > .menu-popover > .button:disabled { opacity: .45; cursor: not-allowed; }
+.menu:not(.reaction-menu) > .menu-popover > .button > svg {
+  display: block;
+  flex: 0 0 var(--menu-icon-size);
+  width: var(--menu-icon-size);
+  height: var(--menu-icon-size);
+  margin: 0;
+}
+.menu-item-label { min-width: 0; flex: 1; overflow-wrap: anywhere; }
+.menu-popover > .button > kbd {
+  flex: 0 0 auto;
+  margin-left: auto;
+  color: var(--context-muted);
+  font-family: var(--font-ui);
+  font-size: var(--text-xs);
+  font-weight: 400;
+  line-height: calc(16px * var(--ui-scale, 1));
+  white-space: nowrap;
+}
+.menu-popover > .menu-separator {
+  flex: 0 0 auto;
+  height: 1px;
+  margin: 6px 10px;
+  background: var(--menu-divider);
+}
+/* Popover-less hosts still get a viewport-anchored menu, not a clipped sidebar. */
+.menu-popover[data-floating='true'] {
+  position: fixed !important;
+  inset: auto !important;
+  margin: 0 !important;
+  top: var(--floating-top, 8px) !important;
+  left: var(--floating-left, 8px) !important;
+  max-height: calc(100dvh - 16px);
+  overflow-y: auto;
+  z-index: 100;
+  transform: none;
+}
+/* Only visible before bootstrap, or when an attachment viewer blocks JavaScript. */
+.preview-startup {
+  max-width: 520px;
+  padding: var(--space-8);
+  margin: var(--space-12) auto;
+  color: var(--text);
+  font-family: var(--font-ui);
+}
+.preview-startup h1 { margin-bottom: var(--space-4); font-size: var(--text-title); }
+.preview-startup p { margin-bottom: var(--space-3); color: var(--muted); line-height: 1.6; }
+@media (pointer: coarse) {
+  .menu:not(.reaction-menu) > .menu-popover > .button { min-height: max(var(--menu-item-height), var(--control-touch)); }
+}
+@media (prefers-reduced-motion: reduce) {
+  .menu:not(.reaction-menu) > .menu-popover > .button { transition: none; }
+}

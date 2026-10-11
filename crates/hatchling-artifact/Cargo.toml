@@ -1,0 +1,24 @@
+[package]
+name = "hatchling-artifact"
+version = "0.1.0"
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+publish.workspace = true
+authors.workspace = true
+repository.workspace = true
+description = "The artifact pipeline core: pinned build requests, broker-asserted provenance, the share-review gate, and the single delivery function."
+
+[lints]
+workspace = true
+
+[dependencies]
+hatchling-core = { version = "0.1.0", path = "../hatchling-core" }
+# Base64 forms of held secrets, so the share-review gate also finds a
+# secret a builder encoded before embedding it.
+base64 = "0.22"
+serde = { version = "1", features = ["derive"] }
+# Builder input and output, and the stored build records.
+serde_json = "1"
+# Content hashes: pinned inputs, the inputs hash, and the output hash.
+sha2 = "0.10"

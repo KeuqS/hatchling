@@ -1,0 +1,10 @@
+import { spawn, execFileSync } from 'node:child_process';
+import { watch, cpSync } from 'node:fs';
+execFileSync(process.execPath, ['scripts/build.mjs'], { stdio: 'inherit' });
+const compiler = spawn(process.execPath, ['node_modules/typescript/bin/tsc', '--watch', '--preserveWatchOutput'], { stdio: 'inherit' });
+const server = spawn(process.execPath, ['scripts/serve.mjs'], { stdio: 'inherit', env: { ...process.env, PORT: process.env.PORT ?? '5173' } });
+watch('src/styles', { recursive: true }, () => cpSync('src/styles', 'dist/styles', { recursive: true }));
+watch('public', { recursive: true }, () => cpSync('public', 'dist', { recursive: true }));
+watch('index.html', () => cpSync('index.html', 'dist/index.html'));
+console.log('Watching TypeScript, styles and public assets. Refresh the browser after a change.');
+process.on('SIGINT', () => { compiler.kill(); server.kill(); process.exit(); });

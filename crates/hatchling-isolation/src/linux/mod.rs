@@ -1,0 +1,167 @@
+//! The Linux backend: the cell the broker has always built, behind the
+//! seam (, moved unchanged from the broker's `cell` module).
+//!
+//! [`Linux::isolate`](crate::IsolationBackend::isolate) forks a child
+//! that enters a user namespace, a mount namespace, and its own network
+//! and IPC namespaces ; the parent writes the id maps; the child
+//! bind-mounts exactly the cell's view (all read-only but the granted
+//! writable directories) into a fresh tmpfs root, `pivot_root`s, enters
+//! a pid namespace, becomes the cell user, drops every capability
+//!, forks the agent under a reaper, and in the agent sets
+//! `NoNewPrivs`, installs the seccomp allowlist and execs the program.
+//!
+//! [`Linux::isolate`](crate::IsolationBackend::isolate) must be called
+//! before the caller starts other threads: it forks, and forking a
+//! multi-threaded process is unsound.
+//!
+//! The identity story: in-cell uid 0 maps to the identity's principal,
+//! so `SO_PEERCRED` on the broker socket reports that principal. The
+//! cell sees the broker (whose uid is outside its map) as the kernel
+//! overflow uid ([`Linux::broker_in_cell`](crate::IsolationBackend::broker_in_cell)).
+//!
+//! All OS interaction goes through `hatchling-sys`: this module
+//! contains no `unsafe`.
+
+mod identity;
+mod spawn;
+mod supervise;
+mod view;
+
+pub use spawn::LinuxCell;
+pub use supervise::LinuxProcess;
+
+use crate::{CellIdentity, CellSpec, CellView, Error, IsolationBackend, SuperviseError};
+
+/// The Linux backend.
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
+pub struct Linux;
+
+impl IsolationBackend for Linux {
+    type Cell = LinuxCell;
+    type Process = LinuxProcess;
+
+    fn owner(&self) -> u32 {
+        hatchling_sys::euid()
+    }
+
+    fn identity(&self, principal: Option<u32>, count: u32) -> Result<CellIdentity, Error> {
+        identity::identity(hatchling_sys::euid(), principal, count)
+    }
+
+    fn broker_in_cell(&self, identity: &CellIdentity) -> Result<u32, Error> {
+        identity::broker_in_cell(hatchling_sys::euid(), *identity)
+    }
+
+    fn view(&self, spec: &CellSpec) -> Result<CellView, Error> {
+        view::view(spec)
+    }
+
+    fn isolate(&self, spec: &CellSpec) -> Result<LinuxCell, Error> {
+        spawn::isolate(spec)
+    }
+
+    fn supervise(&self, child: &mut std::process::Child) -> Result<LinuxProcess, SuperviseError> {
+        supervise::supervise(child)
+    }
+}
+
+/// Whether this box can run a real cell, found by running one: a nested
+/// user namespace (a container) or a kernel that restricts unprivileged
+/// user namespaces cannot. `HATCHLING_REQUIRE_CELL=1` turns the honest
+/// skip into a failure, so a mutation run never mistakes a skipped test
+/// for a passing one (a mutant that breaks the cell fails here).
+#[cfg(test)]
+pub(crate) fn cell_available() -> bool {
+    use crate::Cell as _;
+    let probe = Linux.identity(None, 1).map(|identity| CellSpec {
+        identity,
+        program: std::path::PathBuf::from("/bin/true"),
+        argv: vec![String::from(crate::PROGRAM)],
+        env: Vec::new(),
+        workdir: None,
+        endpoint: None,
+        exposures: Vec::new(),
+        tools: Vec::new(),
+        relay: None,
+        filter: crate::Filter::Program,
+    });
+    let works = probe
+        .and_then(|spec| Linux.isolate(&spec))
+        .and_then(LinuxCell::wait)
+        .is_ok_and(|exit| exit.code == 0);
+    let required = std::env::var("HATCHLING_REQUIRE_CELL").is_ok_and(|v| v == "1");
+    assert!(
+        works || !required,
+        "HATCHLING_REQUIRE_CELL=1 but this box cannot build a cell: refusing to skip"
+    );
+    works
+}
+
+/// A program that exits with code 1 under the cell's filter: GNU
+/// `false` where the distribution ships it beside another `false`.
+#[cfg(test)]
+pub(crate) fn false_witness() -> std::path::PathBuf {
+    let gnu = std::path::Path::new("/usr/bin/gnufalse");
+    if gnu.exists() {
+        gnu.to_path_buf()
+    } else {
+        std::path::PathBuf::from("/bin/false")
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn the_owner_is_this_process() {
+        assert_eq!(Linux.owner(), hatchling_sys::euid());
+    }
+
+    #[test]
+    fn the_backend_views_and_supervises_through_its_modules() {
+        use crate::Supervised as _;
+        let mut child = std::process::Command::new("/bin/true").spawn().unwrap();
+        let process = Linux.supervise(&mut child).unwrap();
+        let exit = process
+            .wait_deadline(std::time::Duration::from_secs(10))
+            .unwrap();
+        assert_eq!(exit.code, 0);
+        let spec = CellSpec {
+            identity: Linux.identity(None, 1).unwrap(),
+            program: std::path::PathBuf::from("/bin/true"),
+            argv: Vec::new(),
+            env: Vec::new(),
+            workdir: None,
+            endpoint: None,
+            exposures: Vec::new(),
+            tools: Vec::new(),
+            relay: None,
+            filter: crate::Filter::Program,
+        };
+        assert_eq!(Linux.view(&spec).unwrap(), view::view(&spec).unwrap());
+    }
+
+    #[test]
+    fn the_trait_methods_are_the_modules() {
+        let euid = hatchling_sys::euid();
+        assert_eq!(
+            Linux.identity(None, 1).unwrap(),
+            identity::identity(euid, None, 1).unwrap()
+        );
+        let identity = Linux.identity(None, 1).unwrap();
+        assert_eq!(
+            Linux.broker_in_cell(&identity).unwrap(),
+            identity::broker_in_cell(euid, identity).unwrap()
+        );
+        // A map that leaves the broker out: the kernel's overflow uid,
+        // which is never the in-cell root.
+        let elsewhere = CellIdentity {
+            principal: euid.wrapping_add(1),
+            count: 1,
+        };
+        let unmapped = Linux.broker_in_cell(&elsewhere).unwrap();
+        assert_eq!(unmapped, identity::broker_in_cell(euid, elsewhere).unwrap());
+        assert_ne!(unmapped, 0, "an unmapped broker is not the cell's root");
+    }
+}

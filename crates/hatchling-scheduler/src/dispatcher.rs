@@ -1,0 +1,524 @@
+//! The dispatcher: fires due schedules, delivers what their runs
+//! produce, and parks what cannot be delivered.
+//!
+//! It is a plain state machine driven by [`Dispatcher::tick`], with the
+//! clock, the store, the run launcher, and the delivery path all passed
+//! in. The broker ticks it with the real ones; tests tick it with fakes
+//! and a fake clock.
+//!
+//! One tick:
+//!
+//! 1. **Finished runs are delivered.** Each run that has finished since
+//!    the last tick has its output delivered to its schedule's channel,
+//!    if the creator still holds `channel-send` on it. A failed delivery
+//!    is logged and retried once. If the retry fails too, the output is
+//!    parked in the store for the user. Nothing is dropped silently.
+//! 2. **Due schedules fire.** For each schedule whose `next_due` has
+//!    come:
+//!    - **Overlap: skip.** If its previous run is still active, this fire
+//!      is skipped. At most one run per schedule exists at any time, so
+//!      a run slower than its interval cannot stack.
+//!    - **Missed fires: once, flagged.** If the fire is more than
+//!      [`MISSED_GRACE_SECS`] late (the broker was down), it fires once,
+//!      with `missed: true` in the run request, and not once per missed
+//!      occurrence. The flag is the broker's, not the agent's.
+//!    - **Grants re-checked.** The run gets the schedule's grants that
+//!      the creator still holds. A grant revoked since creation is not
+//!      the run's to use.
+//!
+//!    Either way, the schedule then moves to its next fire after `now`,
+//!    resuming its cadence. A one-shot schedule is removed. A follow-up
+//!    is a one-shot like any other, so a chain runs one link at a time.
+//! 3. **Events fire hooks.** An event is a [`HookSource`] the
+//!    broker asserts:
+//!    - **From outside the dispatcher,** only a channel message that
+//!      arrived through an authenticated ingress, on a channel in
+//!      [`Services::authenticated`]. Any other event is refused before
+//!      a run spawns: it is not one the broker can vouch for.
+//!    - **From the dispatcher itself:** a schedule's run finished
+//!      (step 1). Nothing else can assert that, and a run's output is
+//!      never parsed for events.
+//!
+//!    Each hook on the event fires through the same path as a schedule:
+//!    at most one run per hook (a fire while it runs is skipped), and
+//!    the hook's grants the creator still holds.
+
+use std::collections::{BTreeSet, HashMap};
+
+use hatchling_core::{FeedSpec, HookSource, ScheduleGrant};
+use jiff::Timestamp;
+
+use crate::hook::Hook;
+use crate::schedule::{Schedule, Timing, effective_grants};
+
+/// How late a fire may be and still count as on time, in seconds. The
+/// broker ticks well inside this, so only a broker that was down (or
+/// stalled) produces a missed fire.
+pub const MISSED_GRACE_SECS: i64 = 60;
+
+/// One scheduled or hook run, as the launcher is asked to start it.
+/// Every field is the broker's: none comes from a run.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct RunRequest {
+    /// The schedule or hook it is for.
+    pub schedule_id: String,
+    /// The task text.
+    pub task: String,
+    /// The grants the run may use: the schedule's or hook's, minus any
+    /// revoked.
+    pub grants: Vec<ScheduleGrant>,
+    /// When this fire was due.
+    pub due: Timestamp,
+    /// Whether the fire is late because the broker missed it.
+    pub missed: bool,
+    /// Where the run's output goes.
+    pub channel: String,
+    /// The run's depth in its follow-up chain: 0 unless it is a
+    /// follow-up.
+    pub depth: u32,
+    /// For a hook run, the event that fired it.
+    pub event: Option<HookSource>,
+    /// For a space task's run, the space it is a task of: its
+    /// session may use that space and no other.
+    pub space: Option<String>,
+    /// For a feed's run, what its digest gathers: the broker
+    /// generates it, read-only, instead of starting a cell.
+    pub feed: Option<FeedSpec>,
+}
+
+/// A result that could not be delivered, kept for the user.
+#[derive(Debug, Clone, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
+pub struct Parked {
+    /// The schedule it came from.
+    pub schedule_id: String,
+    /// The channel it was for.
+    pub channel: String,
+    /// The run's output, or what went wrong.
+    pub text: String,
+    /// When the fire was due, in Unix seconds.
+    pub due: i64,
+    /// Why it was parked.
+    pub reason: String,
+}
+
+/// Where schedules live. Broker-private: only the broker implements it.
+pub trait Store {
+    /// A backend failure.
+    type Error: std::fmt::Display;
+
+    /// Every stored schedule.
+    ///
+    /// # Errors
+    ///
+    /// Returns the backend's error.
+    fn load(&self) -> Result<Vec<Schedule>, Self::Error>;
+
+    /// Replaces a stored schedule, but only if it still exists (a
+    /// cancel that raced this tick wins). Returns whether it existed.
+    ///
+    /// # Errors
+    ///
+    /// Returns the backend's error.
+    fn update(&self, schedule: &Schedule) -> Result<bool, Self::Error>;
+
+    /// Removes a schedule. Returns whether it existed.
+    ///
+    /// # Errors
+    ///
+    /// Returns the backend's error.
+    fn remove(&self, id: &str) -> Result<bool, Self::Error>;
+
+    /// Every stored hook.
+    ///
+    /// # Errors
+    ///
+    /// Returns the backend's error.
+    fn hooks(&self) -> Result<Vec<Hook>, Self::Error>;
+
+    /// Keeps an undeliverable result for the user.
+    ///
+    /// # Errors
+    ///
+    /// Returns the backend's error.
+    fn park(&self, parked: &Parked) -> Result<(), Self::Error>;
+}
+
+/// A running scheduled run.
+pub trait Run {
+    /// `None` while it runs; its output, or why it failed, once done.
+    fn poll(&mut self) -> Option<Result<String, String>>;
+}
+
+/// Starts scheduled runs: the bounded agent runs the broker spawns.
+pub trait Launcher {
+    /// The run handle.
+    type Run: Run;
+
+    /// Starts one run.
+    ///
+    /// # Errors
+    ///
+    /// Returns why it could not start.
+    fn launch(&self, request: RunRequest) -> Result<Self::Run, String>;
+}
+
+/// Delivers a run's output to a channel.
+pub trait Delivery {
+    /// Delivers `text` on `channel`.
+    ///
+    /// # Errors
+    ///
+    /// Returns why it could not.
+    fn deliver(&self, channel: &str, text: &str) -> Result<(), String>;
+}
+
+/// What one tick did, for the broker's logs and for tests.
+#[derive(Debug, Default, Clone, PartialEq, Eq)]
+pub struct TickReport {
+    /// Runs started: schedule id, and whether the fire was missed.
+    pub launched: Vec<(String, bool)>,
+    /// Fires skipped because the previous run was still active.
+    pub skipped: Vec<String>,
+    /// Outputs delivered, by schedule id.
+    pub delivered: Vec<String>,
+    /// Results parked, by schedule id.
+    pub parked: Vec<String>,
+    /// Grants withheld from a run because they were revoked.
+    pub revoked: Vec<(String, ScheduleGrant)>,
+    /// Schedules removed: one-shots done, or no longer evaluable.
+    pub removed: Vec<String>,
+    /// Events refused: not from a source the broker authenticates.
+    pub refused_events: Vec<HookSource>,
+}
+
+/// What a run in flight was started for.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum Kind {
+    Schedule,
+    Hook,
+}
+
+/// A run in flight.
+struct Active<R> {
+    run: R,
+    channel: String,
+    due: Timestamp,
+    kind: Kind,
+}
+
+/// One run to start: what [`Dispatcher::start`] needs, from a schedule
+/// or a hook.
+struct Start<'a> {
+    id: &'a str,
+    task: &'a str,
+    grants: &'a [ScheduleGrant],
+    channel: &'a str,
+    due: Timestamp,
+    missed: bool,
+    depth: u32,
+    event: Option<HookSource>,
+    space: Option<&'a str>,
+    feed: Option<&'a FeedSpec>,
+    kind: Kind,
+}
+
+/// The dispatcher's state: the runs in flight, one per schedule at most.
+pub struct Dispatcher<R> {
+    active: HashMap<String, Active<R>>,
+}
+
+impl<R> Default for Dispatcher<R> {
+    fn default() -> Self {
+        Self {
+            active: HashMap::new(),
+        }
+    }
+}
+
+impl<R> std::fmt::Debug for Dispatcher<R> {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("Dispatcher")
+            .field("active", &self.active.len())
+            .finish()
+    }
+}
+
+/// The services one tick uses.
+pub struct Services<'a, S, L, D> {
+    /// The schedule store.
+    pub store: &'a S,
+    /// The run launcher.
+    pub launcher: &'a L,
+    /// The delivery path.
+    pub delivery: &'a D,
+    /// What the creator holds right now.
+    pub held: &'a BTreeSet<ScheduleGrant>,
+    /// Events the broker observed outside the dispatcher since the last
+    /// tick: messages that arrived through its authenticated ingress.
+    pub events: &'a [HookSource],
+    /// The channels whose messages the broker authenticates.
+    pub authenticated: &'a BTreeSet<String>,
+}
+
+impl<R: Run> Dispatcher<R> {
+    /// How many runs are in flight.
+    #[must_use]
+    pub fn active(&self) -> usize {
+        self.active.len()
+    }
+
+    /// Runs one tick at `now`. See the module docs for what it does.
+    ///
+    /// # Errors
+    ///
+    /// Returns the store's error if the schedules cannot be loaded.
+    /// Failures on a single schedule are logged and reported, and do not
+    /// stop the tick.
+    pub fn tick<S, L, D>(
+        &mut self,
+        now: Timestamp,
+        services: &Services<'_, S, L, D>,
+    ) -> Result<TickReport, S::Error>
+    where
+        S: Store,
+        L: Launcher<Run = R>,
+        D: Delivery,
+    {
+        let mut report = TickReport::default();
+        let finished = self.deliver_finished(services, &mut report);
+        for schedule in services.store.load()? {
+            let Some(due) = schedule.due() else {
+                continue;
+            };
+            if due > now {
+                continue;
+            }
+            self.fire(&schedule, due, now, services, &mut report);
+        }
+        let mut events: Vec<HookSource> = Vec::new();
+        for event in services.events {
+            if !authenticated(event, services.authenticated) {
+                tracing::warn!(%event, "event from a source the broker cannot vouch for: refused");
+                report.refused_events.push(event.clone());
+            } else if !events.contains(event) {
+                events.push(event.clone());
+            }
+        }
+        events.extend(finished);
+        if !events.is_empty() {
+            let hooks = services.store.hooks()?;
+            for event in &events {
+                for hook in hooks.iter().filter(|hook| hook.source == *event) {
+                    self.start(
+                        &Start {
+                            id: &hook.id,
+                            task: &hook.task,
+                            grants: &hook.grants,
+                            channel: &hook.channel,
+                            due: now,
+                            missed: false,
+                            depth: 0,
+                            event: Some(event.clone()),
+                            space: None,
+                            feed: None,
+                            kind: Kind::Hook,
+                        },
+                        services,
+                        &mut report,
+                    );
+                }
+            }
+        }
+        Ok(report)
+    }
+
+    /// Delivers what finished, and returns the events that asserts: one
+    /// [`HookSource::ScheduleRunFinished`] per schedule run that ended.
+    fn deliver_finished<S: Store, L, D: Delivery>(
+        &mut self,
+        services: &Services<'_, S, L, D>,
+        report: &mut TickReport,
+    ) -> Vec<HookSource> {
+        let mut events = Vec::new();
+        let finished: Vec<(String, Result<String, String>)> = self
+            .active
+            .iter_mut()
+            .filter_map(|(id, active)| active.run.poll().map(|outcome| (id.clone(), outcome)))
+            .collect();
+        for (id, outcome) in finished {
+            let Some(active) = self.active.remove(&id) else {
+                continue;
+            };
+            if active.kind == Kind::Schedule {
+                events.push(HookSource::ScheduleRunFinished {
+                    schedule_id: id.clone(),
+                });
+            }
+            let parked = |text: String, reason: String| Parked {
+                schedule_id: id.clone(),
+                channel: active.channel.clone(),
+                text,
+                due: active.due.as_second(),
+                reason,
+            };
+            let undelivered = match outcome {
+                Err(failure) => Some(parked(failure, String::from("the run failed"))),
+                Ok(output) => {
+                    let send = ScheduleGrant::ChannelSend {
+                        channel: active.channel.clone(),
+                    };
+                    if services.held.contains(&send) {
+                        deliver_with_retry(services.delivery, &active.channel, &output)
+                            .err()
+                            .map(|error| parked(output, format!("delivery failed twice: {error}")))
+                    } else {
+                        Some(parked(
+                            output,
+                            String::from("channel-send was revoked before delivery"),
+                        ))
+                    }
+                }
+            };
+            match undelivered {
+                None => report.delivered.push(id),
+                Some(parked) => {
+                    tracing::warn!(schedule = %id, reason = %parked.reason, "scheduled result parked");
+                    if let Err(error) = services.store.park(&parked) {
+                        tracing::error!(schedule = %id, %error, "parking a scheduled result failed");
+                    }
+                    report.parked.push(id);
+                }
+            }
+        }
+        events
+    }
+
+    fn fire<S: Store, L: Launcher<Run = R>, D>(
+        &mut self,
+        schedule: &Schedule,
+        due: Timestamp,
+        now: Timestamp,
+        services: &Services<'_, S, L, D>,
+        report: &mut TickReport,
+    ) {
+        let id = schedule.id.clone();
+        let Ok(timing) = Timing::parse(&schedule.when) else {
+            // Its timezone left the system database, say. It can never
+            // be evaluated again: remove it, loudly.
+            tracing::error!(schedule = %id, "schedule no longer evaluable: removed");
+            let _ = services.store.remove(&id);
+            report.removed.push(id);
+            return;
+        };
+        self.start(
+            &Start {
+                id: &id,
+                task: &schedule.task,
+                grants: &schedule.grants,
+                channel: &schedule.channel,
+                due,
+                missed: now.as_second() >= due.as_second().saturating_add(MISSED_GRACE_SECS),
+                depth: schedule.depth,
+                event: None,
+                space: schedule.space.as_deref(),
+                feed: schedule.feed.as_ref(),
+                kind: Kind::Schedule,
+            },
+            services,
+            report,
+        );
+        // Resume the cadence from now: never once per missed occurrence.
+        // A one-shot has no fire after its own (its only fire is due, so
+        // not after now), and is removed.
+        if let Some(next) = timing.next_after(now) {
+            let mut moved = schedule.clone();
+            moved.next_due = next.as_second();
+            let _ = services.store.update(&moved);
+        } else {
+            let _ = services.store.remove(&id);
+            report.removed.push(id);
+        }
+    }
+
+    /// Starts one run of a schedule or hook: skipped while its previous
+    /// run is active, with the grants the creator still holds, and parked
+    /// if it cannot start.
+    fn start<S: Store, L: Launcher<Run = R>, D>(
+        &mut self,
+        start: &Start<'_>,
+        services: &Services<'_, S, L, D>,
+        report: &mut TickReport,
+    ) {
+        let id = start.id.to_owned();
+        if self.active.contains_key(&id) {
+            tracing::warn!(schedule = %id, "previous run still active: fire skipped");
+            report.skipped.push(id);
+            return;
+        }
+        let (grants, revoked) = effective_grants(start.grants, services.held);
+        for grant in revoked {
+            tracing::warn!(schedule = %id, ?grant, "revoked grant withheld from the run");
+            report.revoked.push((id.clone(), grant));
+        }
+        let request = RunRequest {
+            schedule_id: id.clone(),
+            task: start.task.to_owned(),
+            grants,
+            due: start.due,
+            missed: start.missed,
+            channel: start.channel.to_owned(),
+            depth: start.depth,
+            event: start.event.clone(),
+            space: start.space.map(str::to_owned),
+            feed: start.feed.cloned(),
+        };
+        match services.launcher.launch(request) {
+            Ok(run) => {
+                self.active.insert(
+                    id.clone(),
+                    Active {
+                        run,
+                        channel: start.channel.to_owned(),
+                        due: start.due,
+                        kind: start.kind,
+                    },
+                );
+                report.launched.push((id, start.missed));
+            }
+            Err(failure) => {
+                tracing::error!(schedule = %id, %failure, "scheduled run did not start");
+                let parked = Parked {
+                    schedule_id: id.clone(),
+                    channel: start.channel.to_owned(),
+                    text: failure,
+                    due: start.due.as_second(),
+                    reason: String::from("the run did not start"),
+                };
+                let _ = services.store.park(&parked);
+                report.parked.push(id);
+            }
+        }
+    }
+}
+
+/// Whether an event observed outside the dispatcher is one the broker
+/// can vouch for: a message on a channel it authenticates. A finished
+/// run is never one: only the dispatcher asserts that, from its own
+/// state.
+fn authenticated(event: &HookSource, channels: &BTreeSet<String>) -> bool {
+    match event {
+        HookSource::ChannelMessage { channel } => channels.contains(channel),
+        HookSource::ScheduleRunFinished { .. } => false,
+    }
+}
+
+/// Delivers, retrying once after a logged failure.
+fn deliver_with_retry<D: Delivery>(delivery: &D, channel: &str, text: &str) -> Result<(), String> {
+    match delivery.deliver(channel, text) {
+        Ok(()) => Ok(()),
+        Err(first) => {
+            tracing::warn!(channel, error = %first, "scheduled delivery failed; retrying once");
+            delivery.deliver(channel, text)
+        }
+    }
+}

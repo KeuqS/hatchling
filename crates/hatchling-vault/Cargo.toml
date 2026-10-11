@@ -1,0 +1,64 @@
+[package]
+name = "hatchling-vault"
+version = "0.1.0"
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+publish.workspace = true
+authors.workspace = true
+repository.workspace = true
+description = "Broker-owned credential store: validated secret names, zeroizing secrets, atomic 0600 storage under a 0700 root"
+
+[lints]
+workspace = true
+
+[dependencies]
+thiserror = "2"
+tracing = "0.1"
+# The shared contract: SecretName, MAX_SECRET_BYTES. The vault enforces
+# the contract's rules; it does not invent its own.
+hatchling-core = { version = "0.1.0", path = "../hatchling-core" }
+# Memory hygiene for secret bytes: zeroized on drop.
+# The `derive` feature gives `MasterKey` the declarative
+# `Zeroize`/`ZeroizeOnDrop` derives instead of a hand-written `Drop`.
+zeroize = { version = "1", features = ["derive"] }
+# Safe wrappers over Linux syscalls (getuid for vault-root ownership checks).
+# Keeps the workspace-wide `unsafe_code = "deny"` intact: no hand-rolled FFI.
+rustix = { version = "0.38", features = ["process"] }
+# Authenticated encryption for the sealed vault: XChaCha20-Poly1305
+# ciphertext at rest under a 256-bit master key. Pure Rust, alloc-only,
+# no build script. `default-features = false`: the default `getrandom`
+# feature would pull `rand_core` 0.6 → `getrandom` 0.2 and trip the
+# duplicate-version ban (the tree already has `getrandom` 0.4 via `cc`);
+# nonces are filled directly with `getrandom` 0.4 instead. The `std`
+# feature is for `aead::Error: std::error::Error` (thiserror
+# `#[source]`); the crypto itself stays no-panic, alloc-only.
+chacha20poly1305 = { version = "0.10", default-features = false, features = ["std"] }
+# OS randomness for master-key generation and nonces. Direct dep (not via
+# `rand`) with default features (`std`): we need a CSPRNG, nothing else.
+# Version 0.4 is already in the tree (via `cc`); `rand_core` 0.6 would
+# pull `getrandom` 0.2 and trip the duplicate-version ban.
+getrandom = "0.4"
+# The keyring file: the wraps of the DEK, as JSON. Already in the
+# workspace (hatchling-core's wire types); no new crates.
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+# The hardware-key tier: the KEK is HKDF-SHA-256 of the FIDO2
+# hmac-secret output. hkdf is new (RustCrypto, reviewed in
+# docs/dependency-review.md); hmac and sha2 are already in the workspace.
+hkdf = "0.12"
+hmac = "0.12"
+sha2 = "0.10"
+# The TOTP tier: RFC 6238 codes are HMAC-SHA-1, which is what
+# authenticator apps compute; the tier's KEK is Argon2id of the seed, as the
+# work order pins. Both new (RustCrypto, reviewed). argon2 without its
+# default features: no password-hash API, no rand_core.
+sha1 = "0.10"
+argon2 = { version = "0.5", default-features = false, features = ["alloc"] }
+# Constant-time comparison of one-time codes. Already in the tree.
+subtle = "2"
+
+[features]
+# A software FIDO2 authenticator, for tests only. Off by default:
+# no real build carries a software key that could unlock the vault.
+virtual-authenticator = []

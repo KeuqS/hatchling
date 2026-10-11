@@ -1,0 +1,58 @@
+[package]
+name = "hatchling-adversarial"
+version = "0.1.0"
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+publish.workspace = true
+authors.workspace = true
+repository.workspace = true
+description = " cell adversarial suite: probe binary plus harness assertion helpers. Dev-only; never linked into the runtime."
+
+[lints]
+workspace = true
+
+[[bin]]
+name = "hatchling-probe"
+path = "src/main.rs"
+
+# a real executable skill for the skill-runtime tests. Its input
+# picks its behavior (echo, hostile output, flood, hang, failure).
+[[bin]]
+name = "hatchling-skill-fixture"
+path = "src/skill_fixture.rs"
+
+# -2: a program the scheduler's run launcher starts in place of the
+# agent, inside a real run cell. Its task picks the probes it runs through
+# the run's own socket.
+[[bin]]
+name = "hatchling-run-fixture"
+path = "src/run_fixture.rs"
+
+# A test-only artifact builder: run as a skill by the broker's
+# artifact pipeline tests. Never linked into the runtime.
+[[bin]]
+name = "hatchling-builder-fixture"
+path = "src/builder_fixture.rs"
+
+# a stub coding harness, run by the broker in a real harness cell
+# in place of Claude Code or the Codex CLI. Its prompt picks what it does.
+[[bin]]
+name = "hatchling-harness-fixture"
+path = "src/harness_fixture.rs"
+
+[dependencies]
+# The probe performs the real broker handshake and session protocol,
+# so the peer-gate and uniform-deny attacks exercise production code
+# paths, not a reimplementation.
+hatchling-core = { version = "0.1.0", path = "../hatchling-core" }
+# The denied-syscall catalog is computed as the kernel-header table
+# minus SeccompProfile::agent()'s allowlist: structurally 1:1, cannot drift.
+hatchling-sys = { version = "0.1.0", path = "../hatchling-sys" }
+# Safe syscall wrappers (socket, poll): the probe's only raw
+# syscall is the seccomp probe itself, via hatchling-sys.
+rustix = { version = "0.38", features = ["event", "net", "process"] }
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+
+[dev-dependencies]

@@ -1,0 +1,57 @@
+[
+  {
+    "connect": "ok",
+    "kind": "filesystem",
+    "socket": "/sock/broker.sock"
+  },
+  {
+    "connect": "errno:2",
+    "kind": "filesystem",
+    "socket": "/sock/decoy.sock"
+  },
+  {
+    "connect": "errno:2",
+    "kind": "filesystem",
+    "socket": "/tmp/hatchling-ambient.sock"
+  },
+  {
+    "connect": "errno:2",
+    "kind": "filesystem",
+    "socket": "/var/run/hatchling-ambient.sock"
+  },
+  {
+    "connect": "errno:2",
+    "kind": "filesystem",
+    "socket": "/run/hatchling-ambient.sock"
+  },
+  {
+    "connect": "errno:2",
+    "kind": "filesystem",
+    "socket": "/tmp/dbus-ambient"
+  },
+  {
+    "connect": "errno:111",
+    "kind": "abstract",
+    "socket": "hatchling-broker"
+  },
+  {
+    "connect": "errno:111",
+    "kind": "abstract",
+    "socket": "hatchling-ambient"
+  },
+  {
+    "connect": "errno:111",
+    "kind": "abstract",
+    "socket": "dbus-system"
+  },
+  {
+    "connect": "errno:111",
+    "kind": "abstract",
+    "socket": "dbus-session"
+  },
+  {
+    "connect": "errno:111",
+    "kind": "abstract",
+    "socket": "snapd"
+  }
+]

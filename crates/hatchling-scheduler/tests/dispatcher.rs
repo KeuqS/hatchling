@@ -1,0 +1,851 @@
+//! Component: the dispatcher against a fake clock, an in-memory store,
+//! a scripted launcher, and a scripted delivery path.
+//!
+//! Every test is deterministic: time only moves when a test passes a
+//! later `now` to `tick`, and a run finishes only when its test says so.
+#![allow(
+    clippy::unwrap_used,
+    reason = "fixtures: a failed setup must fail the calling test loudly"
+)]
+
+use std::cell::RefCell;
+use std::collections::{BTreeMap, BTreeSet};
+use std::rc::Rc;
+
+use hatchling_core::{HookSource, ScheduleGrant, ScheduleSpec};
+use hatchling_scheduler::{
+    Delivery, Dispatcher, FollowupParent, Hook, Launcher, MAX_FOLLOWUP_DEPTH, MISSED_GRACE_SECS,
+    Parked, Run, RunRequest, Schedule, Services, Store, TickReport, Timestamp, validate,
+    validate_followup, validate_space_task,
+};
+
+/// An in-memory store.
+#[derive(Default)]
+struct MemStore {
+    schedules: RefCell<BTreeMap<String, Schedule>>,
+    hooks: RefCell<Vec<Hook>>,
+    parked: RefCell<Vec<Parked>>,
+}
+
+impl Store for MemStore {
+    type Error = String;
+
+    fn load(&self) -> Result<Vec<Schedule>, String> {
+        Ok(self.schedules.borrow().values().cloned().collect())
+    }
+
+    fn update(&self, schedule: &Schedule) -> Result<bool, String> {
+        let mut schedules = self.schedules.borrow_mut();
+        Ok(schedules
+            .get_mut(&schedule.id)
+            .map(|stored| *stored = schedule.clone())
+            .is_some())
+    }
+
+    fn remove(&self, id: &str) -> Result<bool, String> {
+        Ok(self.schedules.borrow_mut().remove(id).is_some())
+    }
+
+    fn hooks(&self) -> Result<Vec<Hook>, String> {
+        Ok(self.hooks.borrow().clone())
+    }
+
+    fn park(&self, parked: &Parked) -> Result<(), String> {
+        self.parked.borrow_mut().push(parked.clone());
+        Ok(())
+    }
+}
+
+/// A run whose outcome the test sets.
+#[derive(Clone, Default)]
+struct FakeRun(Rc<RefCell<Option<Result<String, String>>>>);
+
+impl FakeRun {
+    fn finish(&self, outcome: Result<&str, &str>) {
+        *self.0.borrow_mut() = Some(outcome.map(str::to_owned).map_err(str::to_owned));
+    }
+}
+
+impl Run for FakeRun {
+    fn poll(&mut self) -> Option<Result<String, String>> {
+        self.0.borrow_mut().take()
+    }
+}
+
+/// Records every request and hands back a controllable run.
+#[derive(Default)]
+struct FakeLauncher {
+    requests: RefCell<Vec<RunRequest>>,
+    runs: RefCell<Vec<FakeRun>>,
+    refuse: bool,
+}
+
+impl Launcher for FakeLauncher {
+    type Run = FakeRun;
+
+    fn launch(&self, request: RunRequest) -> Result<FakeRun, String> {
+        self.requests.borrow_mut().push(request);
+        if self.refuse {
+            return Err(String::from("no cell available"));
+        }
+        let run = FakeRun::default();
+        self.runs.borrow_mut().push(run.clone());
+        Ok(run)
+    }
+}
+
+impl FakeLauncher {
+    fn run(&self, index: usize) -> FakeRun {
+        self.runs.borrow().get(index).cloned().unwrap()
+    }
+}
+
+/// Delivers into a log, failing the first `fail` attempts.
+#[derive(Default)]
+struct FakeDelivery {
+    delivered: RefCell<Vec<(String, String)>>,
+    attempts: RefCell<usize>,
+    fail: usize,
+}
+
+impl Delivery for FakeDelivery {
+    fn deliver(&self, channel: &str, text: &str) -> Result<(), String> {
+        let attempt = {
+            let mut attempts = self.attempts.borrow_mut();
+            *attempts += 1;
+            *attempts
+        };
+        if attempt <= self.fail {
+            return Err(format!("attempt {attempt} failed"));
+        }
+        self.delivered
+            .borrow_mut()
+            .push((channel.to_owned(), text.to_owned()));
+        Ok(())
+    }
+}
+
+fn ts(rfc3339: &str) -> Timestamp {
+    rfc3339.parse().unwrap()
+}
+
+fn send(channel: &str) -> ScheduleGrant {
+    ScheduleGrant::ChannelSend {
+        channel: channel.to_owned(),
+    }
+}
+
+fn egress(destination: &str) -> ScheduleGrant {
+    ScheduleGrant::Egress {
+        destination: destination.to_owned(),
+    }
+}
+
+fn held() -> BTreeSet<ScheduleGrant> {
+    BTreeSet::from([send("local"), egress("api.example.com:443")])
+}
+
+/// Creates and stores a schedule, created at `now`, as the broker does.
+fn schedule(store: &MemStore, id: &str, when: ScheduleSpec, now: &str) -> Schedule {
+    let created = validate(
+        id.to_owned(),
+        when,
+        String::from("summarize the inbox"),
+        vec![send("local"), egress("api.example.com:443")],
+        String::from("local"),
+        &held(),
+        ts(now),
+    )
+    .unwrap();
+    store
+        .schedules
+        .borrow_mut()
+        .insert(id.to_owned(), created.clone());
+    created
+}
+
+fn cron(expr: &str, tz: &str) -> ScheduleSpec {
+    ScheduleSpec::Cron {
+        expr: expr.to_owned(),
+        tz: tz.to_owned(),
+    }
+}
+
+struct World {
+    store: MemStore,
+    launcher: FakeLauncher,
+    delivery: FakeDelivery,
+    held: BTreeSet<ScheduleGrant>,
+    authenticated: BTreeSet<String>,
+    dispatcher: Dispatcher<FakeRun>,
+}
+
+impl World {
+    fn new() -> Self {
+        Self {
+            store: MemStore::default(),
+            launcher: FakeLauncher::default(),
+            delivery: FakeDelivery::default(),
+            held: held(),
+            authenticated: BTreeSet::from([String::from("local")]),
+            dispatcher: Dispatcher::default(),
+        }
+    }
+
+    fn tick(&mut self, now: &str) -> TickReport {
+        self.tick_with(now, &[])
+    }
+
+    /// A tick with these events observed outside the dispatcher.
+    fn tick_with(&mut self, now: &str, events: &[HookSource]) -> TickReport {
+        let services = Services {
+            store: &self.store,
+            launcher: &self.launcher,
+            delivery: &self.delivery,
+            held: &self.held,
+            events,
+            authenticated: &self.authenticated,
+        };
+        self.dispatcher.tick(ts(now), &services).unwrap()
+    }
+
+    fn requests(&self) -> Vec<RunRequest> {
+        self.launcher.requests.borrow().clone()
+    }
+
+    /// Stores a hook as the broker does after validating it.
+    fn hook(&self, id: &str, source: HookSource, grants: Vec<ScheduleGrant>) {
+        self.store.hooks.borrow_mut().push(Hook {
+            id: id.to_owned(),
+            source,
+            task: format!("task of {id}"),
+            grants,
+            channel: String::from("local"),
+        });
+    }
+
+    fn next_due(&self, id: &str) -> Option<String> {
+        self.store
+            .schedules
+            .borrow()
+            .get(id)
+            .and_then(Schedule::due)
+            .map(|t| t.to_string())
+    }
+}
+
+#[test]
+fn a_cron_schedule_fires_at_its_minute_and_delivers_to_its_channel() {
+    let mut world = World::new();
+    schedule(
+        &world.store,
+        "s",
+        cron("30 9 * * *", "Europe/Berlin"),
+        "2026-09-21T12:00:00Z",
+    );
+    // 09:30 Berlin is 07:30Z. A minute early: nothing.
+    assert_eq!(world.tick("2026-09-22T07:29:00Z"), TickReport::default());
+    // At the minute: one run, on time, with the schedule's grants.
+    let report = world.tick("2026-09-22T07:30:05Z");
+    assert_eq!(report.launched, [(String::from("s"), false)]);
+    let request = world.launcher.requests.borrow().first().cloned().unwrap();
+    assert_eq!(request.task, "summarize the inbox");
+    assert_eq!(
+        request.grants,
+        [send("local"), egress("api.example.com:443")]
+    );
+    assert_eq!(request.due, ts("2026-09-22T07:30:00Z"));
+    assert!(!request.missed);
+    assert_eq!(request.space, None, "an ordinary schedule has no space");
+    assert_eq!(world.next_due("s").as_deref(), Some("2026-09-23T07:30:00Z"));
+    // The run finishes; the next tick delivers its output.
+    world.launcher.run(0).finish(Ok("3 new messages"));
+    let report = world.tick("2026-09-22T07:31:00Z");
+    assert_eq!(report.delivered, ["s"]);
+    assert_eq!(
+        *world.delivery.delivered.borrow(),
+        [(String::from("local"), String::from("3 new messages"))]
+    );
+    assert_eq!(world.dispatcher.active(), 0);
+}
+
+#[test]
+fn a_space_tasks_run_is_bound_to_its_space_and_holds_only_what_is_still_held() {
+    let mut world = World::new();
+    // The space holds both grants; the creator has since lost egress.
+    let space_grants = held();
+    let task = validate_space_task(
+        String::from("sch-t"),
+        "spc-1",
+        String::from("water the plants"),
+        vec![send("local"), egress("api.example.com:443")],
+        String::from("local"),
+        &space_grants,
+        ts("2026-09-21T12:00:00Z"),
+    )
+    .unwrap();
+    assert_eq!(task.space.as_deref(), Some("spc-1"));
+    assert_eq!(task.next_due, ts("2026-09-21T12:00:01Z").as_second());
+    world
+        .store
+        .schedules
+        .borrow_mut()
+        .insert(String::from("sch-t"), task);
+    world.held = BTreeSet::from([send("local")]);
+    let report = world.tick("2026-09-21T12:00:01Z");
+    assert_eq!(report.launched, [(String::from("sch-t"), false)]);
+    assert_eq!(report.removed, ["sch-t"], "a one-shot");
+    let request = world.requests().first().cloned().unwrap();
+    assert_eq!(request.space.as_deref(), Some("spc-1"));
+    assert_eq!(request.grants, [send("local")]);
+    assert_eq!(request.task, "water the plants");
+}
+
+#[test]
+fn a_space_task_holds_only_what_its_space_holds() {
+    let space_grants = BTreeSet::from([send("local")]);
+    let refused = validate_space_task(
+        String::from("sch-t"),
+        "spc-1",
+        String::from("t"),
+        vec![send("local"), egress("api.example.com:443")],
+        String::from("local"),
+        &space_grants,
+        ts("2026-09-21T12:00:00Z"),
+    );
+    assert_eq!(
+        refused.map(|schedule| schedule.id),
+        Err(hatchling_core::ScheduleRefusal::ExceedsGrants)
+    );
+}
+
+#[test]
+fn the_dispatcher_debugs_its_run_count() {
+    let mut world = World::new();
+    assert_eq!(
+        format!("{:?}", world.dispatcher),
+        "Dispatcher { active: 0 }"
+    );
+    schedule(
+        &world.store,
+        "s",
+        cron("0 * * * *", "UTC"),
+        "2026-09-21T12:00:00Z",
+    );
+    world.tick("2026-09-21T13:00:00Z");
+    assert_eq!(
+        format!("{:?}", world.dispatcher),
+        "Dispatcher { active: 1 }"
+    );
+}
+
+#[test]
+fn a_one_shot_fires_once_and_is_removed() {
+    let mut world = World::new();
+    schedule(
+        &world.store,
+        "once",
+        ScheduleSpec::Once {
+            at: String::from("2026-10-01T09:00"),
+            tz: String::from("UTC"),
+        },
+        "2026-09-21T12:00:00Z",
+    );
+    let report = world.tick("2026-10-01T09:00:00Z");
+    assert_eq!(report.launched, [(String::from("once"), false)]);
+    assert_eq!(report.removed, ["once"]);
+    assert!(world.store.schedules.borrow().is_empty());
+    world.launcher.run(0).finish(Ok("done"));
+    assert_eq!(world.tick("2026-10-01T09:01:00Z").delivered, ["once"]);
+    assert_eq!(world.tick("2026-10-02T09:00:00Z"), TickReport::default());
+    assert_eq!(world.launcher.requests.borrow().len(), 1);
+}
+
+#[test]
+fn a_grant_revoked_before_the_fire_is_withheld_from_the_run() {
+    let mut world = World::new();
+    schedule(
+        &world.store,
+        "s",
+        cron("0 * * * *", "UTC"),
+        "2026-09-21T12:00:00Z",
+    );
+    // The egress grant is revoked after creation.
+    world.held = BTreeSet::from([send("local")]);
+    let report = world.tick("2026-09-21T13:00:00Z");
+    assert_eq!(report.launched, [(String::from("s"), false)]);
+    assert_eq!(
+        report.revoked,
+        [(String::from("s"), egress("api.example.com:443"))]
+    );
+    let request = world.launcher.requests.borrow().first().cloned().unwrap();
+    assert_eq!(request.grants, [send("local")], "the run cannot use it");
+}
+
+#[test]
+fn a_revoked_channel_send_parks_the_output_instead_of_delivering() {
+    let mut world = World::new();
+    schedule(
+        &world.store,
+        "s",
+        cron("0 * * * *", "UTC"),
+        "2026-09-21T12:00:00Z",
+    );
+    world.tick("2026-09-21T13:00:00Z");
+    world.held = BTreeSet::from([egress("api.example.com:443")]);
+    world.launcher.run(0).finish(Ok("the report"));
+    let report = world.tick("2026-09-21T13:01:00Z");
+    assert_eq!(report.parked, ["s"]);
+    assert!(world.delivery.delivered.borrow().is_empty());
+    let parked = world.store.parked.borrow().first().cloned().unwrap();
+    assert_eq!(parked.text, "the report");
+    assert_eq!(parked.channel, "local");
+    assert_eq!(parked.due, ts("2026-09-21T13:00:00Z").as_second());
+    assert!(parked.reason.contains("revoked"), "{}", parked.reason);
+}
+
+#[test]
+fn an_overlapping_fire_is_skipped_so_runs_never_stack() {
+    let mut world = World::new();
+    schedule(
+        &world.store,
+        "s",
+        cron("* * * * *", "UTC"),
+        "2026-09-21T12:00:00Z",
+    );
+    assert_eq!(world.tick("2026-09-21T12:01:00Z").launched.len(), 1);
+    // The run is still going for three more minutes: each fire skips.
+    for minute in ["02", "03", "04"] {
+        let report = world.tick(&format!("2026-09-21T12:{minute}:00Z"));
+        assert_eq!(report.skipped, ["s"], "12:{minute}");
+        assert!(report.launched.is_empty(), "12:{minute}");
+        assert_eq!(world.dispatcher.active(), 1);
+    }
+    // It finishes: the next fire launches again, and delivers the first.
+    world.launcher.run(0).finish(Ok("slow"));
+    let report = world.tick("2026-09-21T12:05:00Z");
+    assert_eq!(report.delivered, ["s"]);
+    assert_eq!(report.launched, [(String::from("s"), false)]);
+    assert_eq!(
+        world.launcher.requests.borrow().len(),
+        2,
+        "never more than one at a time"
+    );
+}
+
+#[test]
+fn missed_fires_fire_once_flagged_then_resume_the_cadence() {
+    let mut world = World::new();
+    schedule(
+        &world.store,
+        "s",
+        cron("0 * * * *", "UTC"),
+        "2026-09-21T12:00:00Z",
+    );
+    // The broker was down from before 13:00 until 17:20: four missed.
+    let report = world.tick("2026-09-21T17:20:00Z");
+    assert_eq!(
+        report.launched,
+        [(String::from("s"), true)],
+        "one fire, flagged"
+    );
+    let request = world.launcher.requests.borrow().first().cloned().unwrap();
+    assert!(request.missed);
+    assert_eq!(
+        request.due,
+        ts("2026-09-21T13:00:00Z"),
+        "the oldest missed fire"
+    );
+    // The cadence resumes from now, not from the missed fires.
+    assert_eq!(world.next_due("s").as_deref(), Some("2026-09-21T18:00:00Z"));
+    world.launcher.run(0).finish(Ok("late"));
+    world.tick("2026-09-21T17:21:00Z");
+    let report = world.tick("2026-09-21T18:00:10Z");
+    assert_eq!(
+        report.launched,
+        [(String::from("s"), false)],
+        "on time again"
+    );
+    assert_eq!(world.launcher.requests.borrow().len(), 2);
+}
+
+#[test]
+fn lateness_under_the_grace_is_on_time_and_at_it_is_missed() {
+    let mut world = World::new();
+    schedule(
+        &world.store,
+        "a",
+        cron("0 * * * *", "UTC"),
+        "2026-09-21T12:00:00Z",
+    );
+    let report = world.tick("2026-09-21T13:00:59Z");
+    assert_eq!(report.launched, [(String::from("a"), false)]);
+    let mut world = World::new();
+    schedule(
+        &world.store,
+        "b",
+        cron("0 * * * *", "UTC"),
+        "2026-09-21T12:00:00Z",
+    );
+    let report = world.tick("2026-09-21T13:01:00Z");
+    assert_eq!(report.launched, [(String::from("b"), true)]);
+    assert_eq!(MISSED_GRACE_SECS, 60);
+}
+
+#[test]
+fn a_failed_delivery_is_retried_once_then_parked() {
+    let mut world = World::new();
+    world.delivery.fail = 1;
+    schedule(
+        &world.store,
+        "s",
+        cron("0 * * * *", "UTC"),
+        "2026-09-21T12:00:00Z",
+    );
+    world.tick("2026-09-21T13:00:00Z");
+    world.launcher.run(0).finish(Ok("first"));
+    assert_eq!(
+        world.tick("2026-09-21T13:01:00Z").delivered,
+        ["s"],
+        "the retry landed"
+    );
+    assert_eq!(*world.delivery.attempts.borrow(), 2);
+
+    let mut world = World::new();
+    world.delivery.fail = 2;
+    schedule(
+        &world.store,
+        "s",
+        cron("0 * * * *", "UTC"),
+        "2026-09-21T12:00:00Z",
+    );
+    world.tick("2026-09-21T13:00:00Z");
+    world.launcher.run(0).finish(Ok("lost?"));
+    assert_eq!(world.tick("2026-09-21T13:01:00Z").parked, ["s"]);
+    assert_eq!(*world.delivery.attempts.borrow(), 2, "one retry, no more");
+    let parked = world.store.parked.borrow().first().cloned().unwrap();
+    assert_eq!(parked.text, "lost?");
+    assert!(
+        parked.reason.contains("attempt 2 failed"),
+        "{}",
+        parked.reason
+    );
+}
+
+#[test]
+fn failed_and_unstarted_runs_are_parked_not_dropped() {
+    let mut world = World::new();
+    schedule(
+        &world.store,
+        "s",
+        cron("0 * * * *", "UTC"),
+        "2026-09-21T12:00:00Z",
+    );
+    world.tick("2026-09-21T13:00:00Z");
+    world.launcher.run(0).finish(Err("the model timed out"));
+    assert_eq!(world.tick("2026-09-21T13:01:00Z").parked, ["s"]);
+    let parked = world.store.parked.borrow().first().cloned().unwrap();
+    assert_eq!(parked.text, "the model timed out");
+    assert_eq!(parked.reason, "the run failed");
+
+    let mut world = World::new();
+    world.launcher.refuse = true;
+    schedule(
+        &world.store,
+        "s",
+        cron("0 * * * *", "UTC"),
+        "2026-09-21T12:00:00Z",
+    );
+    let report = world.tick("2026-09-21T13:00:00Z");
+    assert!(report.launched.is_empty());
+    assert_eq!(report.parked, ["s"]);
+    assert_eq!(world.dispatcher.active(), 0);
+    let parked = world.store.parked.borrow().first().cloned().unwrap();
+    assert_eq!(parked.reason, "the run did not start");
+    assert_eq!(parked.due, ts("2026-09-21T13:00:00Z").as_second());
+    // The cadence still moved on.
+    assert_eq!(world.next_due("s").as_deref(), Some("2026-09-21T14:00:00Z"));
+}
+
+#[test]
+fn a_schedule_that_cannot_be_evaluated_is_removed_loudly() {
+    let mut world = World::new();
+    let mut broken = schedule(
+        &world.store,
+        "s",
+        cron("0 * * * *", "UTC"),
+        "2026-09-21T12:00:00Z",
+    );
+    broken.when = cron("0 * * * *", "Mars/Olympus");
+    world
+        .store
+        .schedules
+        .borrow_mut()
+        .insert(String::from("s"), broken);
+    let report = world.tick("2026-09-21T13:00:00Z");
+    assert_eq!(report.removed, ["s"]);
+    assert!(report.launched.is_empty());
+    assert!(world.store.schedules.borrow().is_empty());
+}
+
+#[test]
+fn only_due_schedules_fire_and_a_cancel_mid_run_is_respected() {
+    let mut world = World::new();
+    schedule(
+        &world.store,
+        "hourly",
+        cron("0 * * * *", "UTC"),
+        "2026-09-21T12:00:00Z",
+    );
+    schedule(
+        &world.store,
+        "daily",
+        cron("0 9 * * *", "UTC"),
+        "2026-09-21T12:00:00Z",
+    );
+    let report = world.tick("2026-09-21T13:00:00Z");
+    assert_eq!(report.launched, [(String::from("hourly"), false)]);
+    assert_eq!(
+        world.next_due("daily").as_deref(),
+        Some("2026-09-22T09:00:00Z")
+    );
+    // Cancelled while its run is active: the output is still delivered,
+    // and the schedule does not come back.
+    world.store.remove("hourly").unwrap();
+    world.launcher.run(0).finish(Ok("last one"));
+    assert_eq!(world.tick("2026-09-21T13:05:00Z").delivered, ["hourly"]);
+    assert_eq!(world.tick("2026-09-21T14:00:00Z"), TickReport::default());
+    assert!(world.next_due("hourly").is_none());
+}
+
+fn message(channel: &str) -> HookSource {
+    HookSource::ChannelMessage {
+        channel: channel.to_owned(),
+    }
+}
+
+fn finished(id: &str) -> HookSource {
+    HookSource::ScheduleRunFinished {
+        schedule_id: id.to_owned(),
+    }
+}
+
+#[test]
+fn a_hook_fires_on_its_event_and_delivers_to_its_channel() {
+    let mut world = World::new();
+    world.hook(
+        "hk-1",
+        message("local"),
+        vec![send("local"), egress("api.example.com:443")],
+    );
+    // No event, no run.
+    assert_eq!(world.tick("2026-09-21T12:00:00Z"), TickReport::default());
+    let report = world.tick_with("2026-09-21T12:01:00Z", &[message("local")]);
+    assert_eq!(report.launched, [(String::from("hk-1"), false)]);
+    let request = world.requests().first().cloned().unwrap();
+    assert_eq!(
+        request,
+        RunRequest {
+            schedule_id: String::from("hk-1"),
+            task: String::from("task of hk-1"),
+            grants: vec![send("local"), egress("api.example.com:443")],
+            due: ts("2026-09-21T12:01:00Z"),
+            missed: false,
+            channel: String::from("local"),
+            depth: 0,
+            // The broker's own assertion of what fired it.
+            event: Some(message("local")),
+            space: None,
+            feed: None,
+        }
+    );
+    world.launcher.run(0).finish(Ok("triaged 2 messages"));
+    let report = world.tick("2026-09-21T12:02:00Z");
+    assert_eq!(report.delivered, ["hk-1"]);
+    assert_eq!(
+        *world.delivery.delivered.borrow(),
+        [(String::from("local"), String::from("triaged 2 messages"))]
+    );
+    assert_eq!(world.dispatcher.active(), 0);
+    // The hook stays registered: the next event fires it again.
+    let report = world.tick_with("2026-09-21T12:03:00Z", &[message("local")]);
+    assert_eq!(report.launched, [(String::from("hk-1"), false)]);
+}
+
+#[test]
+fn an_event_from_an_unauthenticated_or_unknown_source_spawns_no_run() {
+    let mut world = World::new();
+    // Stored as if validated once; the events below must still be refused.
+    world.hook("hk-tg", message("telegram"), vec![send("local")]);
+    world.hook("hk-fin", finished("s"), vec![send("local")]);
+    let report = world.tick_with(
+        "2026-09-21T12:00:00Z",
+        &[
+            // No authenticated ingress for this channel.
+            message("telegram"),
+            // A finished run, claimed from outside: only the dispatcher
+            // asserts that.
+            finished("s"),
+        ],
+    );
+    assert!(report.launched.is_empty(), "{report:?}");
+    assert!(world.requests().is_empty());
+    assert_eq!(report.refused_events, [message("telegram"), finished("s")]);
+    // An authenticated event that no hook names fires nothing, and is
+    // not a refusal.
+    let report = world.tick_with("2026-09-21T12:01:00Z", &[message("local")]);
+    assert_eq!(report, TickReport::default());
+}
+
+#[test]
+fn a_finished_schedule_run_fires_its_hooks_and_run_output_asserts_nothing() {
+    let mut world = World::new();
+    schedule(
+        &world.store,
+        "s",
+        cron("0 * * * *", "UTC"),
+        "2026-09-21T12:00:00Z",
+    );
+    world.hook("hk-on-s", finished("s"), vec![send("local")]);
+    world.hook("hk-on-other", finished("other"), vec![send("local")]);
+    world.hook("hk-on-msg", message("local"), vec![send("local")]);
+    assert_eq!(
+        world.tick("2026-09-21T13:00:00Z").launched,
+        [(String::from("s"), false)]
+    );
+    // The run's output names other events: text is never an event.
+    world
+        .launcher
+        .run(0)
+        .finish(Ok("schedule-run-finished:other channel-message:local"));
+    let report = world.tick("2026-09-21T13:01:00Z");
+    assert_eq!(report.delivered, ["s"]);
+    assert_eq!(report.launched, [(String::from("hk-on-s"), false)]);
+    let fired = world.requests().last().cloned().unwrap();
+    assert_eq!(fired.event, Some(finished("s")));
+    // The hook's run ends; then a failed schedule run counts as finished
+    // too.
+    world.launcher.run(1).finish(Ok("noted"));
+    world.tick("2026-09-21T13:02:00Z");
+    assert_eq!(
+        world.tick("2026-09-21T14:00:00Z").launched,
+        [(String::from("s"), false)]
+    );
+    world.launcher.run(2).finish(Err("the model was down"));
+    let report = world.tick("2026-09-21T14:01:00Z");
+    assert_eq!(report.parked, ["s"]);
+    assert_eq!(report.launched, [(String::from("hk-on-s"), false)]);
+}
+
+#[test]
+fn a_hook_run_finishing_asserts_no_event() {
+    let mut world = World::new();
+    world.hook("hk-a", message("local"), vec![send("local")]);
+    // A hook on the first hook's id, as if it were a schedule.
+    world.hook("hk-b", finished("hk-a"), vec![send("local")]);
+    world.tick_with("2026-09-21T12:00:00Z", &[message("local")]);
+    world.launcher.run(0).finish(Ok("done"));
+    let report = world.tick("2026-09-21T12:01:00Z");
+    assert_eq!(report.delivered, ["hk-a"]);
+    assert!(report.launched.is_empty(), "{report:?}");
+}
+
+#[test]
+fn a_hook_holds_only_what_its_creator_still_holds() {
+    let mut world = World::new();
+    world.hook(
+        "hk-1",
+        message("local"),
+        vec![send("local"), egress("api.example.com:443")],
+    );
+    world.held = BTreeSet::from([send("local")]);
+    let report = world.tick_with("2026-09-21T12:00:00Z", &[message("local")]);
+    assert_eq!(
+        report.revoked,
+        [(String::from("hk-1"), egress("api.example.com:443"))]
+    );
+    assert_eq!(world.requests().first().unwrap().grants, [send("local")]);
+}
+
+#[test]
+fn overlapping_hook_fires_do_not_stack() {
+    let mut world = World::new();
+    world.hook("hk-1", message("local"), vec![send("local")]);
+    // Two messages in one tick are one event.
+    let report = world.tick_with(
+        "2026-09-21T12:00:00Z",
+        &[message("local"), message("local")],
+    );
+    assert_eq!(report.launched, [(String::from("hk-1"), false)]);
+    assert!(report.skipped.is_empty(), "{report:?}");
+    // Another while the run is active: skipped, not stacked.
+    let report = world.tick_with("2026-09-21T12:01:00Z", &[message("local")]);
+    assert!(report.launched.is_empty());
+    assert_eq!(report.skipped, ["hk-1"]);
+    assert_eq!(world.dispatcher.active(), 1);
+    assert_eq!(world.requests().len(), 1);
+    // Once it finishes, the next event fires it again.
+    world.launcher.run(0).finish(Ok("ok"));
+    let report = world.tick_with("2026-09-21T12:02:00Z", &[message("local")]);
+    assert_eq!(report.delivered, ["hk-1"]);
+    assert_eq!(report.launched, [(String::from("hk-1"), false)]);
+}
+
+#[test]
+fn a_hook_run_that_cannot_start_is_parked() {
+    let mut world = World::new();
+    world.launcher.refuse = true;
+    world.hook("hk-1", message("local"), vec![send("local")]);
+    let report = world.tick_with("2026-09-21T12:00:00Z", &[message("local")]);
+    assert_eq!(report.parked, ["hk-1"]);
+    let parked = world.store.parked.borrow().first().cloned().unwrap();
+    assert_eq!(parked.reason, "the run did not start");
+    assert_eq!(parked.channel, "local");
+    assert_eq!(parked.due, ts("2026-09-21T12:00:00Z").as_second());
+}
+
+#[test]
+fn a_followup_chain_runs_one_link_at_a_time_and_ends_at_the_bound() {
+    let mut world = World::new();
+    let grants = vec![send("local")];
+    let mut now = ts("2026-09-21T12:00:00Z");
+    let mut depth = 0;
+    // Each link: the run at `depth` asks for a follow-up; it is a
+    // one-shot, fires once, and is removed. Never two at once.
+    loop {
+        let parent = FollowupParent {
+            grants: &grants,
+            channel: "local",
+            depth,
+        };
+        let Ok(next) = validate_followup(
+            format!("sch-{depth}"),
+            &parent,
+            String::from("again"),
+            60,
+            grants.clone(),
+            now,
+        ) else {
+            break;
+        };
+        world
+            .store
+            .schedules
+            .borrow_mut()
+            .insert(next.id.clone(), next.clone());
+        now = Timestamp::from_second(next.next_due).unwrap();
+        let report = world.tick(&now.to_string());
+        assert_eq!(report.launched, [(next.id.clone(), false)]);
+        assert_eq!(report.removed, std::slice::from_ref(&next.id));
+        assert_eq!(world.requests().last().unwrap().depth, depth + 1);
+        assert_eq!(world.dispatcher.active(), 1);
+        let index = world.requests().len() - 1;
+        world.launcher.run(index).finish(Ok("link"));
+        world.tick(&now.to_string());
+        assert_eq!(world.dispatcher.active(), 0);
+        depth = next.depth;
+    }
+    assert_eq!(depth, MAX_FOLLOWUP_DEPTH);
+    assert_eq!(world.requests().len(), 5);
+    assert!(world.store.schedules.borrow().is_empty());
+}

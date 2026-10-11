@@ -1,0 +1,26 @@
+[package]
+name = "hatchling-skill"
+version = "0.1.0"
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+publish.workspace = true
+authors.workspace = true
+repository.workspace = true
+description = "Signed skills: manifest format, Ed25519 verification, admission-time grant checks, and call-time capability enforcement"
+
+[lints]
+workspace = true
+
+[dependencies]
+hatchling-core = { version = "0.1.0", path = "../hatchling-core" }
+# Ed25519 signatures: no hand-rolled crypto, ever. ed25519-dalek is the
+# well-reviewed standard implementation.
+ed25519-dalek = { version = "2", features = ["serde"] }
+# Standard base64 encoding for signatures.
+base64 = "0.22"
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+thiserror = "2"
+# SHA-256 for code identity pinning (registry drift detection).
+sha2 = "0.10"

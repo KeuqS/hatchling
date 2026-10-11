@@ -1,0 +1,85 @@
+# cargo-deny configuration: advisories, duplicate dependencies, and licenses.
+# The workspace is dual-licensed AGPL-3.0-or-later + commercial, so every
+# third-party dependency must be permissively licensed: a copyleft dependency
+# would infect both the AGPL and the commercial grant.
+# Schema: https://embarkstudios.github.io/cargo-deny/checks/cfg.html
+# Pinned to cargo-deny 0.20.2 (see.github/workflows/ci.yml).
+
+[graph]
+all-features = true
+
+[advisories]
+# Any matched, non-ignored advisory fails the check. Exceptions must be
+# listed here with a reason.
+ignore = []
+
+[bans]
+# Multiple versions of the same crate in the tree is an error; add a skip
+# entry with a reason if a duplicate is ever genuinely required.
+multiple-versions = "deny"
+wildcards = "deny"
+highlight = "all"
+deny = [
+ # TLS is rustls, on ring, with the bundled roots and the
+    # operator's own bundle only. No system TLS stack, no system CA store.
+ { crate = "openssl", reason = "TLS is rustls only " },
+ { crate = "openssl-sys", reason = "TLS is rustls only " },
+ { crate = "native-tls", reason = "TLS is rustls only " },
+ { crate = "schannel", reason = "TLS is rustls only " },
+ { crate = "security-framework", reason = "TLS is rustls only " },
+ { crate = "rustls-native-certs", reason = "the system CA store is never read " },
+ { crate = "rustls-platform-verifier", reason = "the system CA store is never read " },
+ { crate = "aws-lc-rs", reason = "ring is the one crypto backend " },
+ { crate = "aws-lc-sys", reason = "ring is the one crypto backend " },
+]
+# Justified duplicate-version skips. Each entry must name the exact version
+# and say why the duplicate cannot be eliminated.
+[[bans.skip]]
+name = "syn"
+version = "=3.0.6"
+reason = "thiserror-impl 2.0.20 requires syn 3 while tracing-attributes requires syn 2; both are build-time proc-macro dependencies, so there is no runtime code-duplication concern"
+
+[[bans.skip]]
+name = "windows-sys"
+version = "=0.59.0"
+reason = "rustix 0.38 requires windows-sys 0.59 while errno/tracing-subscriber pull 0.61; windows-sys is Windows-only and never compiles into the Linux binary, so the duplicate is inert"
+
+[[bans.skip]]
+name = "getrandom"
+version = "=0.2.17"
+reason = "ring 0.17 (rustls's one crypto provider in hatchling-egress) requires getrandom 0.2 while hatchling-vault uses getrandom 0.4 directly; both only read the OS RNG, so the duplicate is a few hundred lines of glue"
+
+[[bans.skip]]
+name = "windows-sys"
+version = "=0.52.0"
+reason = "ring 0.17 (via rustls in hatchling-egress) requires windows-sys 0.52 while rustix requires 0.59; windows-sys is Windows-only and never compiles into the Linux binary, so the duplicate is inert"
+
+[licenses]
+# Permissive licenses only. The workspace crates' own AGPL-3.0-or-later is
+# deliberately NOT on this list: it is exempted by [licenses.private]
+# ignore = true below, so our own crates pass while a third-party AGPL
+# dependency fails this check.
+allow = [
+    "MIT",
+    "Apache-2.0",
+    "BSD-2-Clause",
+    "BSD-3-Clause",
+    "ISC",
+    "Unicode-3.0",
+    # CDLA-Permissive-2.0 covers webpki-roots (the bundled Mozilla CA
+    # list hatchling-egress's rustls client trusts): a permissive data
+    # license for the certificate list.
+    "CDLA-Permissive-2.0",
+]
+confidence-threshold = 0.8
+exceptions = []
+
+[licenses.private]
+# Workspace crates carry `publish = false` (see [workspace.package]), so
+# cargo-deny treats them as private and skips them here. Net effect: our
+# own AGPL-3.0-or-later passes, but any third-party AGPL dependency fails.
+ignore = true
+
+[sources]
+unknown-registry = "deny"
+unknown-git = "deny"

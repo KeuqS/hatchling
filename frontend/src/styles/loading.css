@@ -1,0 +1,72 @@
+/* All new loading surfaces share these primitives. See STYLE_GUIDE.md. */
+.skeleton-block { display: block; width: var(--skeleton-line-width, 100%); max-width: 100%; background: var(--skeleton-base); border-radius: var(--radius-xs); pointer-events: none; flex-shrink: 0; }
+.skeleton-line { height: var(--skeleton-line-height); }
+.skeleton-title { height: var(--skeleton-title-height); margin-bottom: var(--space-3); }
+.skeleton-avatar { width: var(--skeleton-avatar-size); height: var(--skeleton-avatar-size); border-radius: var(--radius-pill); }
+.skeleton-media { width: 100%; aspect-ratio: 16 / 10; border-radius: var(--radius-md); }
+.skeleton-text { display: flex; flex-direction: column; gap: var(--space-2); min-width: 0; }
+.skeleton-content { pointer-events: none; user-select: none; }
+.skeleton-content-ideas, .skeleton-content-feed { display: flex; flex-direction: column; gap: var(--space-8); padding-block: var(--space-4); }
+.skeleton-editorial-row { display: flex; gap: var(--space-4); }
+.skeleton-row-copy { min-width: 0; flex: 1; padding-top: var(--space-1); }
+.skeleton-content-feed .skeleton-row-copy > .skeleton-media { margin-top: var(--space-4); }
+.skeleton-content-document { display: flex; flex-direction: column; gap: var(--space-6); padding-block: var(--space-6); }
+.skeleton-content-document > .skeleton-title { margin: 0; }
+.skeleton-artifact { display: flex; flex-direction: column; min-width: 0; border: 1px solid var(--border); border-radius: var(--radius-lg); overflow: hidden; }
+.skeleton-artifact > .skeleton-media { border-radius: 0; }
+.skeleton-artifact-meta { display: flex; align-items: center; gap: var(--space-3); padding: var(--space-4); }
+.skeleton-artifact-meta > div { min-width: 0; flex: 1; }
+.skeleton-artifact-meta .skeleton-avatar { border-radius: var(--radius-sm); }
+.skeleton-content-library.artifact-list .skeleton-artifact { flex-direction: row; }
+.skeleton-content-library.artifact-list .skeleton-artifact > .skeleton-media { width: 20%; max-width: 100px; }
+.skeleton-content-library.artifact-list .skeleton-artifact-meta { flex: 1; }
+.skeleton-content-chat { display: flex; flex-direction: column; gap: var(--space-6); }
+.skeleton-chat-agent, .skeleton-chat-user { background: var(--surface); padding: var(--space-4); border-radius: var(--radius-lg) var(--radius-lg) var(--radius-lg) var(--radius-xs); width: 86%; }
+.skeleton-chat-user { width: 52%; align-self: flex-end; border-radius: var(--radius-lg) var(--radius-lg) var(--radius-xs) var(--radius-lg); }
+.content-state { display: flex; flex-wrap: wrap; align-items: center; gap: var(--space-3); padding-block: var(--space-4); margin-bottom: var(--space-4); color: var(--muted); font-size: var(--text-sm); }
+.content-state-copy { display: flex; gap: var(--space-3); align-items: flex-start; flex: 1; min-width: 0; }
+.content-state-copy > svg { margin-top: var(--space-1); }
+.content-state strong { display: block; color: var(--text); font-size: var(--text-sm); font-weight: 500; }
+.content-state p { margin: var(--space-1) 0 0; line-height: 1.5; }
+.content-state .button { font-size: var(--text-sm); min-height: var(--control-touch); }
+.content-state-cached { padding: var(--space-3) var(--space-4); background: var(--surface); border: 1px solid var(--border); border-radius: var(--radius-md); }
+.content-preview-caption { display: flex; align-items: center; justify-content: space-between; flex-wrap: wrap; gap: var(--space-2); flex-basis: 100%; border-top: 1px solid var(--border); padding-top: var(--space-2); font-size: var(--text-xs); color: var(--muted); }
+.content-preview-caption .button { font-size: var(--text-xs); padding: var(--space-1) var(--space-2); }
+.content-state-initial { padding-block: 0; margin-bottom: var(--space-4); }
+.content-state-initial .content-preview-caption { flex-basis: auto; border: 0; padding: 0; margin-left: auto; }
+.skeleton-content-ideas .skeleton-row-copy { max-width: 684px; }
+.loading-region { min-width: 0; }
+.loading-specimen { padding: var(--space-4); border: 1px solid var(--border); border-radius: var(--radius-lg); }
+.loading-specimen + .loading-specimen { margin-top: var(--space-4); }
+.loading-specimen h3 { margin-bottom: var(--space-4); }
+/* Reserve the same frame for loading, success and failure; metadata stays visible. */
+.loading-image { display: block; position: relative; width: 100%; min-width: 0; border-radius: inherit; }
+.loading-image-frame { display: block; position: relative; width: 100%; aspect-ratio: var(--media-ratio); overflow: hidden; border-radius: inherit; background: var(--surface); }
+.loading-image-frame > .skeleton-media { position: absolute; inset: 0; height: 100%; aspect-ratio: auto; border-radius: inherit; }
+.loading-image .loading-image-content { position: absolute; inset: 0; display: block; width: 100%; height: 100%; max-width: none; max-height: none; }
+.loading-image .media-fit-contain { object-fit: contain; }
+.loading-image .media-fit-cover { object-fit: cover; }
+.loading-image[data-media-state='loading'] .loading-image-content, .loading-image[data-media-state='error'] .loading-image-content { visibility: hidden; }
+.loading-image [hidden] { display: none; }
+.thumbnail-loading-image { height: 100%; }
+.thumbnail-loading-image .loading-image-frame { height: 100%; aspect-ratio: auto; }
+.video-thumb > .loading-image { position: absolute; inset: 0; }
+.feed-media:has(.loading-image) { width: 100%; }
+.media-feedback { position: absolute; inset: 0; display: flex; flex-direction: column; align-items: center; justify-content: center; gap: var(--space-2); padding: var(--space-3); text-align: center; background: var(--surface); color: var(--muted); font-size: var(--text-xs); line-height: 1.5; border-radius: inherit; overflow: auto; }
+.media-feedback strong { color: var(--text); font-weight: 500; font-size: var(--text-sm); }
+.media-retry { min-height: var(--control-touch); margin-top: var(--space-2); font-size: var(--text-sm); }
+.artifact-list .media-feedback > span, .artifact-list .media-feedback > svg { display: none; }
+.artifact-list .media-feedback strong { font-size: var(--text-xs); }
+@media (prefers-reduced-motion: no-preference) {
+  .skeleton-block { animation: skeleton-pulse var(--skeleton-pulse-duration) ease-in-out infinite; }
+  .loading-image[data-media-state='loading'] .skeleton-block { animation: skeleton-reveal var(--motion-fast) ease-out var(--loading-reveal-delay) both, skeleton-pulse var(--skeleton-pulse-duration) ease-in-out var(--loading-reveal-delay) infinite; }
+  @keyframes skeleton-pulse { 50% { opacity: .6; } }
+  @keyframes skeleton-reveal { from { visibility: hidden; } to { visibility: visible; } }
+}
+@media (prefers-reduced-motion: reduce) {
+  .skeleton-block { animation: none; transition: none; }
+}
+@media (max-width: 600px) {
+  .content-state-copy { flex-basis: 100%; }
+  .skeleton-content-ideas, .skeleton-content-feed { gap: var(--space-6); }
+}

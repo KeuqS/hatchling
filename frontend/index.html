@@ -1,0 +1,46 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width,initial-scale=1">
+  <meta name="theme-color" content="#181818">
+  <meta name="description" content="Hatchling — your personal agent workspace. A fully local, scripted frontend demonstration.">
+  <meta http-equiv="Content-Security-Policy" content="default-src 'self'; script-src 'self'; style-src 'self' 'unsafe-inline'; img-src 'self' data: blob:; media-src 'self' blob:; connect-src 'self'; font-src 'self'; frame-src 'self' blob:; object-src 'none'; base-uri 'self'; form-action 'self'">
+  <title>Chat — hatchling</title>
+
+  <link rel="icon" href="./favicon.ico" sizes="any">
+  <link rel="icon" href="./favicon-32x32.png" type="image/png" sizes="32x32">
+  <link rel="icon" href="./favicon-16x16.png" type="image/png" sizes="16x16">
+  <link rel="apple-touch-icon" href="./apple-touch-icon.png">
+  <link rel="manifest" href="./site.webmanifest">
+  <link rel="stylesheet" href="./styles/tokens.css">
+  <link rel="stylesheet" href="./styles/app.css">
+  <link rel="stylesheet" href="./styles/workspace.css">
+  <link rel="stylesheet" href="./styles/surfaces.css">
+  <link rel="stylesheet" href="./styles/details.css">
+  <link rel="stylesheet" href="./styles/refinements.css">
+  <link rel="stylesheet" href="./styles/interactions.css">
+  <link rel="stylesheet" href="./styles/conversation.css">
+  <script type="module" src="./app/main.js"></script>
+  <link rel="stylesheet" href="./styles/polish.css">
+  <link rel="stylesheet" href="./styles/chat-navigation.css">
+  <link rel="stylesheet" href="./styles/touchup.css">
+  <link rel="stylesheet" href="./styles/reliability.css">
+  <link rel="stylesheet" href="./styles/approvals.css">
+  <link rel="stylesheet" href="./styles/loading.css">
+  <link rel="stylesheet" href="./styles/menus.css">
+</head>
+<body>
+  <a href="#main" class="skip-link">Skip to content</a>
+  <div id="app">
+    <section class="preview-startup" aria-label="Preview startup">
+      <h1>Opening Hatchling…</h1>
+      <p>This is an interactive local preview. If the workspace does not appear, open the downloaded HTML in a browser that allows JavaScript, or serve the included <code>dist/</code> folder.</p>
+      <p>Attachment viewers that block scripts cannot run the app. No account or installation is needed for the standalone HTML.</p>
+    </section>
+  </div>
+  <div id="dialog-root"></div>
+  <div id="toast-root" role="status" aria-live="polite" aria-atomic="true"></div>
+  <noscript>Hatchling needs JavaScript to show this local demonstration. It does not connect to a backend.</noscript>
+</body>
+</html>

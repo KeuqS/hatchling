@@ -1,0 +1,155 @@
+# cargo-mutants configuration, read from the workspace root.
+#
+# `exclude_re` names mutants that are provably equivalent and therefore
+# unkilleable by any test. Each entry cites its proof. The regexes match
+# the mutant name (`path:line:col: description`) with an unanchored
+# search; they are deliberately narrow so no unrelated mutant is ever
+# hidden. If the cited code changes, the mutant reappears as missed and
+# the kill floor fails loudly — the proof must be re-examined then.
+
+exclude_re = [
+    # `validate_surrogate`: `< MIN_PAYLOAD_LEN` -> `<= MIN_PAYLOAD_LEN`.
+    # A payload of exactly MIN_PAYLOAD_LEN (47 bytes) has a 15-byte
+    # body, so dest_len must be 0; the empty destination then fails
+    # `is_valid_destination` and the surrogate is rejected with
+    # `InvalidSurrogate` either way. Behaviorally identical — no test
+    # can distinguish the two. Proof pinned by
+    # `validate_rejects_exact_min_payload` in
+    # crates/hatchling-egress/src/surrogate.rs.
+    'surrogate\.rs:\d+:\d+: replace < with <= in validate_surrogate',
+    # `set_no_new_privs`: whole-function `Ok(false)` replacement.
+    # Equivalent only where the test process already runs with
+    # NoNewPrivs=1: the flag is inherited across fork, preserved across
+    # exec, and the kernel provides no prctl to clear it, so `before`
+    # is always 1 in such environments (this sandbox: NoNewPrivs: 1 in
+    # /proc/self/status, verified 2026-09-22). The real code then takes
+    # the idempotent SET path and returns Ok(before != 1) = Ok(false),
+    # observationally identical to the mutant (the SET prctl has no
+    # observable effect when the flag is already set). Where the flag
+    # starts clear the mutant is killed twice over by
+    # `set_no_new_privs_actually_sets_the_flag` in
+    # crates/hatchling-sys/src/process.rs: the flag check fails (the
+    # mutant never sets the flag) and the return check fails
+    # (false != true).
+    'process\.rs:\d+:\d+: replace set_no_new_privs -> Result<bool, Error> with Ok\(false\)',
+    # `ch` (Choice) and `maj` (Majority): `^` -> `|` is equivalent.
+    # Choice: `(e & f) ^ ((!e) & g)`. The two terms are mutually
+    # exclusive: where `e` has a 1-bit, `!e` has 0, so the second term
+    # is 0; where `e` has 0, the first term is 0. For mutually exclusive
+    # bit-vectors, XOR and OR are identical. No test can distinguish.
+    # Majority: `(a & b) ^ (a & c) ^ (b & c)`. Exhaustive truth table
+    # over (a,b,c) shows XOR-of-three-terms equals OR-of-three-terms
+    # for all 8 inputs. Verified by analysis 2026-09-23; WSL2
+    # independently confirmed only these 3 (of 11 `^`->`|` in sha256.rs)
+    # are equivalent — the s0/s1/S0/S1 rotations are NOT excluded and
+    # are killed by the NIST test vectors.
+    'sha256\.rs:\d+:\d+: replace \^ with \| in (ch|maj)',
+    # `raw_status`: `|` -> `^` when OR-ing the core-dump bit.
+    # The core-dump bit is 0x80 and the other operand is a Linux
+    # signal number, which is always in 1..=64 (standard 1-31 plus
+    # realtime 32-64) — bit 7 is never set. `|` and `^` differ only
+    # where both operands share a 1-bit, which cannot happen here, so
+    # no test with a real signal can distinguish the two.
+    'process\.rs:\d+:\d+: replace \| with \^ in raw_status',
+    # `readiness`: `|` -> `^` when building the readable-bits mask.
+    # `POLLIN` (0x1), `POLLHUP` (0x10) and `POLLERR` (0x8) are disjoint
+    # single bits, so OR and XOR build the identical mask — no test
+    # can distinguish the two. (Same equivalence class as the
+    # `ch`/`maj` exclusion above.) The `|` -> `&` mutant is NOT
+    # equivalent and stays killable: it is pinned by the
+    # `readiness_interprets_revents_bits` table test.
+    'sync_pipe\.rs:\d+:\d+: replace \| with \^ in readiness',
+    # `base32` (hatchling-vault TOTP): `|` -> `^` when shifting the next
+    # byte into the buffer. `buffer << 8` has its low 8 bits clear and
+    # `u32::from(byte)` has only its low 8 bits set, so the operands
+    # share no 1-bit and OR and XOR build the identical buffer. No test
+    # can distinguish the two. (Same class as `raw_status` and
+    # `readiness` above.) `base32` has no other `|`; the encoder itself is
+    # pinned by `base32_matches_rfc_4648_and_codes_parse_strictly` in
+    # crates/hatchling-vault/src/totp.rs.
+    'totp\.rs:\d+:\d+: replace \| with \^ in base32',
+    # `Child::try_wait`: `|` -> `^` when combining the `waitid` options.
+    # `WaitidOptions::EXITED` (WEXITED, 4) and `WaitidOptions::NOHANG`
+    # (WNOHANG, 1) are disjoint single bits, so OR and XOR build the
+    # identical flag set: no test can distinguish the two. (Same class as
+    # `readiness` and `raw_status` above.) The `|` -> `&` mutant is NOT
+    # equivalent (an empty option set makes `waitid` fail) and stays
+ # killable. Surfaced by the WSL2 full pass: earlier passes
+    # counted it caught only because a flaky hatchling-dev test failed
+    # beside it (fixed in the same patch).
+    'process\.rs:\d+:\d+: replace \| with \^ in Child::try_wait',
+ # memory stack: equivalent mutants (WSL2, with proofs).
+    #
+    # Log-only conditions. `purged` and `reconciled` are counted and
+    # returned regardless; `if n > 0` only decides whether an info line is
+    # emitted. `interrupted` is read only by that log line (every
+    # in-flight call is marked Interrupted in the same loop either way).
+    # Tests install no subscriber, and no caller can observe the log, so
+    # `>` -> `<`/`==`/`>=` and `+=` -> `*=`/`-=` are unobservable.
+    'store\.rs:\d+:\d+: replace > with (<|==|>=) in MemoryStore::purge_expired',
+    'session\.rs:\d+:\d+: replace > with (<|==|>=) in SessionStore<.s>::reconcile_stale',
+    'session\.rs:\d+:\d+: replace \+= with (\*=|-=) in SessionStore<.s>::reconcile$',
+    # `ensure_chain` (moved verbatim from `MemoryStore::scope_dir` by
+ # ; the goals store walks its chains through it too), the
+    # FIRST mode check (`metadata.mode() & 0o777 != DIR_MODE`, column
+    # 28) -> `|` or `^`. `mode()` is the full
+    # st_mode, directory type bits (0o40000) included, and neither
+    # `| 0o777` nor `^ 0o777` clears them, so the mutated value never
+    # equals 0o700: the repair branch always runs, chmods the directory
+    # to the mode it must already have (or repairs it, as the original
+    # would), and re-verifies with the unmutated post-repair check. End
+    # state and error paths are identical. NOT the post-repair re-verify
+    # `&` (column 32), which the repair tests kill. Pinned by column so a
+    # moved check reappears as missed.
+    'owner_dir\.rs:\d+:28: replace & with (\||\^) in ensure_chain',
+    # `ensure_chain`: the create_dir match guard (AlreadyExists) -> `true`.
+    # Every caller validates the root first (`ensure_owner_only_dir`), and
+    # every existing path component is validated and repaired to 0700 and
+    # owned by the store owner before its child is created, so the only
+    # create_dir failures left are resource errors (ENOSPC, EMLINK,
+    # EDQUOT) no test can provoke. Under the mutant those continue to
+    # `symlink_metadata`, which fails NotFound -> Err(Io): still fail-
+    # closed; only the error kind would differ.
+    'owner_dir\.rs:\d+:\d+: replace match guard source\.kind\(\) == std::io::ErrorKind::AlreadyExists with true in ensure_chain',
+    # `ContextLog::entry_count`: the open match guard (NotFound) -> `true`.
+    # Its only caller, `append`, opens the same path for append right
+    # after; any open error entry_count would swallow (EACCES, ELOOP, ...)
+    # fails that open the same way -> Err(Io). The result is identical.
+    'context_log\.rs:\d+:\d+: replace match guard source\.kind\(\) == std::io::ErrorKind::NotFound with true in ContextLog<.s>::entry_count',
+ # `TextProfile::check`: whole-function `vec![]`
+    # replacement. A plain text kind has no shape checks of its own, so
+    # the body already is `Vec::new()`: the mutant is the same function.
+    # Its emptiness is pinned by `the_generic_checks_run_for_every_kind`
+    # in crates/hatchling-artifact/src/kind.rs, which only the generic
+    # checks can fail.
+    'kind\.rs:\d+:\d+: replace <impl KindProfile for TextProfile>::check -> Vec<InspectionFinding> with vec!\[\]',
+ # `serve` (, the harness relay): `Instant::now < deadline` ->
+    # `<=`. The two differ only at the one nanosecond where `now` equals
+    # the deadline exactly, between two polls 20 ms apart: no test can
+    # land a check on it, and either way the loop ends at its next poll.
+    # Both sides of the bound are pinned by
+    # `serving_ends_at_its_deadline_or_its_stop` (and the `&&` by the
+    # stop half of it).
+    'harness_relay\.rs:\d+:58: replace < with <= in serve',
+ # `Upstream::flush` (, egress relay): -> `Ok()`. A plain
+    # upstream is a `TcpStream`, whose flush is std's no-op. A TLS
+    # upstream is rustls 0.23's `StreamOwned`, whose `write` buffers the
+    # plaintext and then runs `complete_io`, which on these blocking
+    # sockets writes every pending record before `write` returns; an
+    # error there is held and returned by the next `write`, inside the
+    # caller's `write_all`. After `write_all` succeeds, flush has nothing
+    # to send and no error to report, so `Ok(())` is the same result. The
+    # request reaching the vendor is pinned by
+    # `an_https_destination_speaks_tls_to_its_own_name` in relay.rs.
+    'hatchling-egress/src/relay\.rs:\d+:\d+: replace <impl Write for Upstream>::flush -> std::io::Result<\(\)> with Ok\(\(\)\)',
+ # `loopback_up`: the socket's `raw < 0` -> `raw <= 0`. They
+    # differ only if `socket` returns fd 0, the lowest free descriptor,
+    # which needs stdin closed. Rust's runtime opens /dev/null on any of
+    # fds 0-2 found closed before `main`, and nothing on the spawn path
+    # closes stdin (`close_range` marks only the fds above stderr), so fd
+    # 0 is always taken where this runs. The failure branch itself is
+    # pinned by `a_socket_that_cannot_be_opened_is_reported_as_such`. Pinned
+    # by column: the ioctl's `< 0` in the same function is not equivalent
+    # (its success is 0) and stays in.
+    'hatchling-sys/src/net\.rs:\d+:12: replace < with <= in loopback_up',
+]

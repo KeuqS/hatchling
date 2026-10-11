@@ -1,0 +1,32 @@
+# Build output
+target/
+build/
+dist/
+node_modules/
+mutants.out/
+mutants.scratch/
+.mutation-cache/
+.mutation-state/
+
+# Editor and OS
+.vscode/
+.idea/
+.DS_Store
+Thumbs.db
+
+# Secrets and local configuration
+.env
+.env.*
+!.env.example
+*.pem
+*.key
+mutants-run.log
+mutants.out.old/
+
+# Python bytecode (never commit)
+__pycache__/
+*.pyc
+*.pyo
+
+# Frontend build artifacts
+frontend/artifacts/

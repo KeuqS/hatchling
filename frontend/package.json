@@ -1,0 +1,40 @@
+{
+  "name": "hatchling-frontend",
+  "version": "1.12.0",
+  "private": true,
+  "type": "module",
+  "description": "Hatchling Frontend — strict TypeScript personal-agent interface with synthetic local fixtures.",
+  "engines": {
+    "node": ">=22.12.0"
+  },
+  "scripts": {
+    "dev": "node scripts/dev.mjs",
+    "build": "node scripts/build.mjs",
+    "preview": "node scripts/serve.mjs",
+    "typecheck": "tsc --noEmit",
+    "lint": "node scripts/lint.mjs",
+    "format": "node scripts/format.mjs --write",
+    "format:check": "node scripts/format.mjs",
+    "test": "npm run build && node --test --experimental-test-coverage --test-coverage-include='dist/app/**' --test-coverage-lines=78 --test-coverage-branches=88 --test-coverage-functions=81 tests/unit/*.test.mjs",
+    "test:e2e": "python3 tests/e2e/test_app.py && python3 tests/e2e/test_reliability.py && python3 tests/e2e/test_approvals.py && python3 tests/e2e/test_loading.py && python3 tests/e2e/test_menus_preview.py",
+    "check": "npm run typecheck && npm run lint && npm run design:check && npm run actions:check && npm run protocol:check && npm run seam:check && npm run format:check && npm test && npm run test:live-coverage",
+    "check:all": "npm run check && npm run test:e2e && npm run test:smoke && npm run test:agent",
+    "screenshots": "python3 tests/e2e/capture_release.py",
+    "test:smoke": "node scripts/smoke-http.mjs",
+    "capture:motion": "python3 tests/e2e/capture_release.py --motion",
+    "agent": "python3 tools/agent.py",
+    "mcp": "python3 tools/agent.py --mcp",
+    "actions:generate": "node scripts/generate-actions.mjs && npm run format",
+    "actions:check": "node scripts/generate-actions.mjs --check",
+    "test:agent": "python3 tests/agent/test_companion.py",
+    "seam:check": "node scripts/verify-baseline.mjs",
+    "integration:check": "node scripts/verify-baseline.mjs --frontend",
+    "design:check": "node scripts/check-design.mjs",
+    "protocol:generate": "node scripts/generate-protocol.mjs",
+    "protocol:check": "node scripts/generate-protocol.mjs --check",
+    "test:live-coverage": "node --test --experimental-test-coverage --test-coverage-include='dist/app/adapters/live/**' --test-coverage-lines=100 --test-coverage-branches=100 --test-coverage-functions=100 tests/unit/live-*.test.mjs"
+  },
+  "devDependencies": {
+    "typescript": "5.8.3"
+  }
+}

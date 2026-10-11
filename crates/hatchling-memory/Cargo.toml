@@ -1,0 +1,22 @@
+[package]
+name = "hatchling-memory"
+version = "0.1.0"
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+publish.workspace = true
+authors.workspace = true
+repository.workspace = true
+description = "Broker-owned durable memory: scoped user/project/session items with explicit retention, durable session records, and an append-only context log. Memory is recalled data, never instructions."
+
+[lints]
+workspace = true
+
+[dependencies]
+thiserror = "2"
+tracing = "0.1"
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+# Safe wrappers over Linux syscalls (getuid for store-root ownership checks).
+# Keeps the workspace-wide `unsafe_code = "deny"` intact: no hand-rolled FFI.
+rustix = { version = "0.38", features = ["process"] }

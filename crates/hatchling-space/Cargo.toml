@@ -1,0 +1,27 @@
+[package]
+name = "hatchling-space"
+version = "0.1.0"
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+publish.workspace = true
+authors.workspace = true
+repository.workspace = true
+description = "Spaces: broker-asserted membership, admission factors, and space tasks."
+
+[lints]
+workspace = true
+
+[dependencies]
+hatchling-core = { version = "0.1.0", path = "../hatchling-core" }
+# Space tasks run as one-shot schedules: the task's grants are validated
+# with the scheduler's own subset-closure, against the space's grants.
+hatchling-scheduler = { version = "0.1.0", path = "../hatchling-scheduler" }
+serde = { version = "1", features = ["derive"] }
+# Sizing paged replies by their encoding.
+serde_json = "1"
+# Devices: the device endpoint's keys and signatures, their
+# base64 wire form, and device ids from key hashes.
+ed25519-dalek = "2"
+base64 = "0.22"
+sha2 = "0.10"

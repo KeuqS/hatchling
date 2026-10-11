@@ -1,0 +1,50 @@
+[workspace]
+resolver = "2"
+members = ["crates/*"]
+
+[workspace.package]
+edition = "2024"
+rust-version = "1.85.0"
+license = "AGPL-3.0-or-later"
+authors = ["Ocean Bennett"]
+repository = "https://github.com/undergroundrap/hatchling"
+# Never publish the workspace crates to a registry: the project is
+# dual-licensed AGPL-3.0-or-later + commercial, and an accidental publish
+# would muddy that. This also marks every crate "private" for cargo-deny,
+# so [licenses.private] ignore = true in deny.toml covers our own AGPL
+# license while third-party AGPL dependencies fail the check.
+publish = false
+
+# All lint configuration lives here. Every crate sets `lints.workspace = true`.
+# There are no per-file `#![allow]`s. A local `#[allow]`/`#[expect]` must name
+# its lint and give a `reason = "..."`.
+[workspace.lints.rust]
+# `unsafe_code` is in the `rust_2018_idioms` group, so the group sits at a
+# lower priority and the explicit deny wins.
+unsafe_code = "deny"
+missing_docs = "warn"
+unreachable_pub = "warn"
+unused_qualifications = "warn"
+rust_2018_idioms = { level = "warn", priority = -1 }
+
+[workspace.lints.clippy]
+pedantic = { level = "warn", priority = -1 }
+nursery = { level = "warn", priority = -1 }
+# Restriction lints: hard deny. (Group lints above sit at warn with lower
+# priority so these explicit denies always win on overlap.)
+unwrap_used = "deny"
+expect_used = "deny"
+panic = "deny"
+todo = "deny"
+unimplemented = "deny"
+dbg_macro = "deny"
+print_stdout = "deny"
+print_stderr = "deny"
+indexing_slicing = "deny"
+string_slice = "deny"
+as_conversions = "deny"
+wildcard_enum_match_arm = "deny"
+undocumented_unsafe_blocks = "deny"
+multiple_unsafe_ops_per_block = "deny"
+exit = "deny"
+mem_forget = "deny"

@@ -1,0 +1,31 @@
+[package]
+name = "hatchling-loop"
+version = "0.1.0"
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+publish.workspace = true
+authors.workspace = true
+repository.workspace = true
+description = "The agent tool-calling loop: LLM-agnostic model trait, validated tool registry, bounded iteration. The model proposes; the host validates and bounds."
+
+[lints]
+workspace = true
+
+[dependencies]
+hatchling-memory = { version = "0.1.0", path = "../hatchling-memory" }
+hatchling-prompt = { version = "0.1.0", path = "../hatchling-prompt" }
+thiserror = "2"
+serde_json = "1"
+tracing = "0.1"
+# NOTE: Tool argument validation uses a minimal hand-rolled JSON Schema
+# subset validator (see tool.rs) instead of the `jsonschema` crate.
+# The full validator pulls in a heavy transitive tree (reqwest, hyper,
+# etc.) that violates the workspace's cargo-deny bans on duplicate
+# versions. The subset covers what tools actually use: object type,
+# properties, required fields, and basic scalar types.
+
+[dev-dependencies]
+# The warn-on-recall-failure test captures tracing output with a
+# scoped subscriber; dev-only, never linked into the runtime.
+tracing-subscriber = "0.3"

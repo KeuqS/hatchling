@@ -1,0 +1,381 @@
+//! Smoke: the real broker binary's startup path.
+//!
+//! Spawning the binary (instead of calling library functions) proves
+//! `main` wires configuration, logging, and startup together. As a
+//! side effect it forces cargo to build the broker binary during
+//! `cargo test` — `env!("CARGO_BIN_EXE_hatchling-broker")` is a build
+//! dependency of this test target — so the binary the agent's
+//! end-to-end tests spawn is always fresh, never stale.
+
+use std::os::unix::fs::PermissionsExt as _;
+use std::process::{Command, Output, Stdio};
+use std::time::{Duration, Instant};
+
+/// Runs the broker binary to completion, with a watchdog: a broker
+/// regression must fail the test, never hang the suite.
+fn run_broker(args: &[&str], vars: &[(&str, &str)], unset: &[&str]) -> Result<Output, String> {
+    let mut command = Command::new(env!("CARGO_BIN_EXE_hatchling-broker"));
+    command
+        .args(args)
+        .envs(vars.iter().copied())
+        .stdout(Stdio::piped())
+        .stderr(Stdio::piped());
+    for key in unset {
+        command.env_remove(key);
+    }
+    let mut child = command.spawn().map_err(|e| format!("spawn failed: {e}"))?;
+    let deadline = Instant::now() + Duration::from_secs(10);
+    loop {
+        if child
+            .try_wait()
+            .map_err(|e| format!("wait failed: {e}"))?
+            .is_some()
+        {
+            return child
+                .wait_with_output()
+                .map_err(|e| format!("output failed: {e}"));
+        }
+        if Instant::now() >= deadline {
+            let _ = child.kill();
+            return Err(String::from("broker did not exit within 10s"));
+        }
+        std::thread::sleep(Duration::from_millis(20));
+    }
+}
+
+/// Unique scratch dir per test. The broker provisions its key under
+/// `<vault>.key/` here, so parallel tests must not share a parent.
+fn scratch_dir(name: &str) -> std::io::Result<std::path::PathBuf> {
+    let dir = std::env::temp_dir().join(format!("hatchling-smoke-{}-{name}", std::process::id()));
+    let _ = std::fs::remove_dir_all(&dir);
+    std::fs::create_dir_all(&dir)?;
+    Ok(dir)
+}
+
+/// Minimal valid broker env for operator subcommands (which never
+/// bind the socket). `HATCHLING_AGENT_BIN` is scrubbed: with it set
+/// the broker would try to spawn a cell instead of running the
+/// subcommand.
+fn operator_env(scratch: &std::path::Path, vault: &str) -> Vec<(&'static str, String)> {
+    vec![
+        (
+            "HATCHLING_BROKER_SOCKET",
+            scratch.join("broker.sock").to_string_lossy().into_owned(),
+        ),
+        (
+            "HATCHLING_AGENT_UID",
+            rustix::process::getuid().as_raw().to_string(),
+        ),
+        ("HATCHLING_LOG_LEVEL", "error".to_owned()),
+        (
+            "HATCHLING_VAULT_DIR",
+            scratch.join(vault).to_string_lossy().into_owned(),
+        ),
+    ]
+}
+
+fn operator_env_refs<'a>(env: &'a [(&'static str, String)]) -> Vec<(&'static str, &'a str)> {
+    env.iter().map(|(k, v)| (*k, v.as_str())).collect()
+}
+
+#[test]
+fn missing_agent_uid_fails_closed() {
+    // Configuration is parsed before anything is bound: without
+    // HATCHLING_AGENT_UID the broker must exit non-zero, never serve.
+    // This pins `main`'s wiring — a `main` that always succeeds, or a
+    // `run` that always returns Ok, fails here.
+    let output = run_broker(
+        &[],
+        &[(
+            "HATCHLING_BROKER_SOCKET",
+            "/tmp/hatchling-smoke-missing-uid.sock",
+        )],
+        &["HATCHLING_AGENT_UID"],
+    )
+    .unwrap();
+
+    assert!(
+        !output.status.success(),
+        "broker started without HATCHLING_AGENT_UID"
+    );
+    let stderr = String::from_utf8_lossy(&output.stderr);
+    assert!(
+        stderr.contains("HATCHLING_AGENT_UID"),
+        "stderr should name the missing variable, was: {stderr}"
+    );
+}
+
+/// An unknown subcommand is a usage error: exit non-zero, usage on
+/// stderr. Pins `main`'s dispatch — a dispatch that always serves, or
+/// always succeeds, fails here.
+#[test]
+fn unknown_subcommand_is_usage_error() {
+    let scratch = scratch_dir("unknown-subcommand").unwrap();
+    let env = operator_env(&scratch, "vault");
+    let output = run_broker(
+        &["frobnicate"],
+        &operator_env_refs(&env),
+        &["HATCHLING_AGENT_BIN"],
+    )
+    .unwrap();
+    let _ = std::fs::remove_dir_all(&scratch);
+
+    assert!(
+        !output.status.success(),
+        "broker accepted an unknown subcommand"
+    );
+    let stderr = String::from_utf8_lossy(&output.stderr);
+    assert!(
+        stderr.contains("unknown subcommand"),
+        "stderr should name the misuse, was: {stderr}"
+    );
+}
+
+/// `rekey-vault` without the new key file path is a usage error, not
+/// a rotation against a default.
+#[test]
+fn rekey_vault_without_new_key_file_is_usage_error() {
+    let scratch = scratch_dir("rekey-no-arg").unwrap();
+    let env = operator_env(&scratch, "vault");
+    let output = run_broker(
+        &["rekey-vault"],
+        &operator_env_refs(&env),
+        &["HATCHLING_AGENT_BIN"],
+    )
+    .unwrap();
+    let _ = std::fs::remove_dir_all(&scratch);
+
+    assert!(
+        !output.status.success(),
+        "rekey-vault without a new key file must fail"
+    );
+    let stderr = String::from_utf8_lossy(&output.stderr);
+    assert!(
+        stderr.contains("rekey-vault requires"),
+        "stderr should name the missing argument, was: {stderr}"
+    );
+}
+
+/// `migrate-vault` encrypts a plaintext store in place: the file that
+/// held raw bytes becomes a `HVL1` envelope, and the report says so.
+#[test]
+fn migrate_vault_seals_plaintext_store() {
+    let scratch = scratch_dir("migrate").unwrap();
+    let vault_dir = scratch.join("vault");
+    std::fs::create_dir_all(&vault_dir).unwrap();
+    std::fs::set_permissions(&vault_dir, std::fs::Permissions::from_mode(0o700)).unwrap();
+    // A plaintext secret, as a pre- store would hold it.
+    std::fs::write(vault_dir.join("tok"), b"plaintext-secret").unwrap();
+
+    let env = operator_env(&scratch, "vault");
+    let output = run_broker(
+        &["migrate-vault"],
+        &operator_env_refs(&env),
+        &["HATCHLING_AGENT_BIN"],
+    )
+    .unwrap();
+
+    assert!(
+        output.status.success(),
+        "migrate-vault failed: {}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+    let stdout = String::from_utf8_lossy(&output.stdout);
+    assert!(
+        stdout.contains("migrate-vault: encrypted 1 secret(s)"),
+        "missing migration report, stdout was: {stdout}"
+    );
+    let sealed = std::fs::read(vault_dir.join("tok")).unwrap();
+    assert!(
+        sealed.starts_with(b"HVL1"),
+        "migrated file is not a sealed envelope"
+    );
+    assert_ne!(
+        sealed.as_slice(),
+        b"plaintext-secret",
+        "plaintext survived migration"
+    );
+    let _ = std::fs::remove_dir_all(&scratch);
+}
+
+/// `vault-keyring` reads its settings from the environment: with
+/// `HATCHLING_VAULT_KEYRING` set, `init` adopts a keyring there and
+/// `status` reports the vault's protection, through the real binary.
+#[test]
+fn vault_keyring_takes_its_settings_from_the_environment() {
+    let scratch = scratch_dir("vault-keyring").unwrap();
+    let vault_dir = scratch.join("vault");
+    std::fs::create_dir_all(&vault_dir).unwrap();
+    std::fs::set_permissions(&vault_dir, std::fs::Permissions::from_mode(0o700)).unwrap();
+    let mut env = operator_env(&scratch, "vault");
+    let made = run_broker(
+        &["migrate-vault"],
+        &operator_env_refs(&env),
+        &["HATCHLING_AGENT_BIN"],
+    )
+    .unwrap();
+    assert!(
+        made.status.success(),
+        "{}",
+        String::from_utf8_lossy(&made.stderr)
+    );
+    let keyring = scratch.join("vault.key").join("keyring");
+    env.push((
+        "HATCHLING_VAULT_KEYRING",
+        keyring.to_string_lossy().into_owned(),
+    ));
+    let run = |action: &str| {
+        run_broker(
+            &["vault-keyring", action],
+            &operator_env_refs(&env),
+            &["HATCHLING_AGENT_BIN"],
+        )
+        .unwrap()
+    };
+    let init = run("init");
+    assert!(
+        init.status.success(),
+        "init failed: {}",
+        String::from_utf8_lossy(&init.stderr)
+    );
+    assert!(keyring.is_file(), "the keyring is where the setting says");
+    let status = run("status");
+    let _ = std::fs::remove_dir_all(&scratch);
+    assert_eq!(
+        String::from_utf8_lossy(&status.stdout),
+        "vault-keyring: tier file, 0 backup code(s) left\n  ways in: a key file, 0 backup code(s) left, no OS keychain (none in this build)\n"
+    );
+}
+
+/// `rekey-vault <new-key-file>` re-encrypts under the new key: the old
+/// key stops decrypting, the new key works, and the bytes change
+/// (fresh nonce per seal).
+#[test]
+fn rekey_vault_rotates_key() {
+    let scratch = scratch_dir("rekey").unwrap();
+    let vault_dir = scratch.join("vault");
+    std::fs::create_dir_all(&vault_dir).unwrap();
+    std::fs::set_permissions(&vault_dir, std::fs::Permissions::from_mode(0o700)).unwrap();
+    std::fs::write(vault_dir.join("tok"), b"plaintext-secret").unwrap();
+
+    let env = operator_env(&scratch, "vault");
+    let refs = operator_env_refs(&env);
+    let unset = &["HATCHLING_AGENT_BIN"];
+    let migrate = run_broker(&["migrate-vault"], &refs, unset).unwrap();
+    assert!(migrate.status.success());
+
+    let before = std::fs::read(vault_dir.join("tok")).unwrap();
+    // The new key file's parent must be owner-only (0700): FileKey
+    // fails closed otherwise, by design.
+    let new_key_dir = scratch.join("newkey");
+    std::fs::create_dir_all(&new_key_dir).unwrap();
+    std::fs::set_permissions(&new_key_dir, std::fs::Permissions::from_mode(0o700)).unwrap();
+    let new_key = new_key_dir.join("key");
+    let output = run_broker(&["rekey-vault", new_key.to_str().unwrap()], &refs, unset).unwrap();
+    assert!(
+        output.status.success(),
+        "rekey-vault failed: {}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+    let stdout = String::from_utf8_lossy(&output.stdout);
+    assert!(
+        stdout.contains("rekey-vault: re-encrypted 1 secret(s)"),
+        "missing rekey report, stdout was: {stdout}"
+    );
+
+    // The bytes changed: re-encryption draws a fresh nonce.
+    let after = std::fs::read(vault_dir.join("tok")).unwrap();
+    assert_ne!(before, after, "rekey left the envelope bytes untouched");
+
+    // The new key decrypts; the old key no longer does.
+    let old_key_file = scratch.join("vault.key").join("key");
+    let old_key = read_key_file(&old_key_file).unwrap();
+    let new_key_bytes = read_key_file(&new_key).unwrap();
+    let name: hatchling_vault::SecretName = "tok".parse().unwrap();
+    let old_err = hatchling_vault::SealedVault::open(&vault_dir, &old_key)
+        .unwrap()
+        .fetch(&name)
+        .unwrap_err();
+    assert!(
+        matches!(old_err, hatchling_vault::Error::DecryptFailed { .. }),
+        "old key should fail closed, got: {old_err:?}"
+    );
+    let secret = hatchling_vault::SealedVault::open(&vault_dir, &new_key_bytes)
+        .unwrap()
+        .fetch(&name)
+        .unwrap();
+    assert_eq!(secret.as_bytes(), b"plaintext-secret");
+    let _ = std::fs::remove_dir_all(&scratch);
+}
+
+/// Reads a 32-byte key file the broker provisioned.
+fn read_key_file(path: &std::path::Path) -> std::io::Result<hatchling_vault::MasterKey> {
+    let bytes = std::fs::read(path)?;
+    if bytes.len() != 32 {
+        return Err(std::io::Error::new(
+            std::io::ErrorKind::InvalidData,
+            "key file is not 32 bytes",
+        ));
+    }
+    let mut arr = [0u8; 32];
+    arr.copy_from_slice(&bytes);
+    Ok(hatchling_vault::MasterKey::from_bytes(arr))
+}
+
+/// A misconfigured vault stops the broker before it binds: the socket
+/// never appears and the exit is non-zero. Pins the fail-fast
+/// `validate_sealed_vault` in the serve path — without it the broker
+/// would bind and only fail on the first agent connection.
+/// The local API's settings come from the environment (, pinned in
+/// ): asking for a network listener without the opt-in stops the
+/// broker at start-up, with the sentence that says why. A broker that
+/// ignored the variable would serve instead, and be killed at the deadline.
+#[test]
+fn the_api_takes_its_settings_from_the_environment() {
+    let scratch = scratch_dir("api-env").unwrap();
+    let mut env = operator_env(&scratch, "vault");
+    env.push(("HATCHLING_API_NETWORK", String::from("127.0.0.1:9")));
+    let output = run_broker(
+        &[],
+        &operator_env_refs(&env),
+        &["HATCHLING_AGENT_BIN", "HATCHLING_API_ALLOW_NETWORK"],
+    );
+    let _ = std::fs::remove_dir_all(&scratch);
+    let output = output.expect("the broker must stop at start-up, not serve");
+    assert!(!output.status.success(), "the broker started");
+    let stderr = String::from_utf8_lossy(&output.stderr);
+    assert!(
+        stderr.contains("HATCHLING_API_NETWORK") && stderr.contains("never the default"),
+        "{stderr}"
+    );
+}
+
+#[test]
+fn bad_vault_root_fails_before_bind() {
+    let scratch = scratch_dir("bad-root").unwrap();
+    let vault_dir = scratch.join("vault");
+    std::fs::create_dir_all(&vault_dir).unwrap();
+    // 0777 root: `Vault::open` must refuse it.
+    std::fs::set_permissions(&vault_dir, std::fs::Permissions::from_mode(0o777)).unwrap();
+
+    let env = operator_env(&scratch, "vault");
+    let socket = scratch.join("broker.sock");
+    let output = run_broker(&[], &operator_env_refs(&env), &["HATCHLING_AGENT_BIN"]).unwrap();
+
+    assert!(
+        !output.status.success(),
+        "broker served with an insecure vault root"
+    );
+    let stderr = String::from_utf8_lossy(&output.stderr);
+    assert!(
+        stderr.contains("vault"),
+        "stderr should blame the vault, was: {stderr}"
+    );
+    assert!(
+        !socket.exists(),
+        "broker bound the socket before validating the vault"
+    );
+    // Restore permissions so the scratch dir can be removed.
+    std::fs::set_permissions(&vault_dir, std::fs::Permissions::from_mode(0o700)).unwrap();
+    let _ = std::fs::remove_dir_all(&scratch);
+}

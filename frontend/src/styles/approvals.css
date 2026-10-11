@@ -1,0 +1,76 @@
+/* Alignment is geometric: SVG +, no font-baseline nudges. */
+.reaction-menu .menu-popover > .button { display: inline-flex; align-items: center; justify-content: center; flex: 0 0 32px; width: 32px; height: 32px; min-height: 32px; padding: 0; line-height: 1; }
+.reaction-menu .menu-popover > .more-reactions { margin: 0 0 0 3px; gap: 0; }
+.reaction-menu .more-reactions > svg { display: block; flex: 0 0 16px; width: 16px; height: 16px; margin: 0; }
+.reaction-menu .menu-popover > .button > span { display: block; line-height: 1; }
+/* The permission request is part of the bottom layout, not a floating overlay. */
+.task-approval-dock { min-width: 0; max-height: min(48dvh, 400px); overflow: auto; overscroll-behavior: contain; margin-bottom: 10px; scrollbar-width: thin; }
+.task-approval-card { background: var(--surface); border: 1px solid var(--border); border-radius: 20px; padding: 14px 16px; font-size: calc(13px * var(--ui-scale)); line-height: 1.45; color: var(--text); }
+.task-approval-heading { display: flex; align-items: center; gap: 8px; margin-bottom: 10px; }
+.task-approval-heading > img { flex: 0 0 28px; object-fit: contain; border-radius: 50%; background: #fff; }
+.task-approval-heading > span { display: inline-flex; align-items: center; gap: 6px; font-size: calc(12px * var(--ui-scale)); font-weight: 500; }
+.task-approval-heading > .button { margin-left: auto; padding: 4px; min-height: 28px; font-size: calc(11px * var(--ui-scale)); white-space: normal; text-align: right; color: var(--muted); }
+.task-approval-request { display: flex; align-items: flex-start; gap: 12px; }
+.task-approval-icon { width: 36px; height: 36px; flex: 0 0 36px; display: grid; place-items: center; border-radius: 12px; background: var(--surface-raised); color: var(--muted); }
+.task-approval-copy { min-width: 0; flex: 1; }
+.task-approval-copy > strong { display: block; font-weight: 550; overflow-wrap: anywhere; font-size: calc(14px * var(--ui-scale)); }
+.task-approval-copy p { margin: 3px 0 0; color: var(--muted); overflow-wrap: anywhere; }
+.task-approval-details { margin: 8px 0 10px 48px; color: var(--muted); font-size: calc(12px * var(--ui-scale)); }
+.task-approval-details > summary { display: flex; align-items: center; gap: 6px; width: fit-content; cursor: pointer; min-height: 28px; list-style: none; }
+.task-approval-details > summary::-webkit-details-marker { display: none; }
+.task-approval-details[open] > summary svg { transform: rotate(90deg); }
+.task-approval-details p { margin: 6px 0; overflow-wrap: anywhere; }
+.task-approval-resource { overflow-wrap: anywhere; font-family: var(--font-mono); font-size: calc(11px * var(--ui-scale)); }
+.task-approval-actions { display: flex; flex-wrap: wrap; gap: 8px; justify-content: flex-end; }
+.task-approval-actions > .button { flex: 1 1 auto; min-height: 38px; padding: 8px 12px; border-radius: 12px; font-size: calc(12px * var(--ui-scale)); }
+.task-approval-actions > .button:not(.primary) { background: var(--surface-raised); }
+.task-approval-feedback { display: flex; align-items: flex-start; gap: 7px; color: var(--muted); font-size: calc(12px * var(--ui-scale)); margin: 10px 0; overflow-wrap: anywhere; }
+.task-approval-feedback > svg { flex-shrink: 0; margin-top: 2px; }
+.task-approval-feedback.error, .task-approval-feedback.unknown { color: var(--attention); }
+.task-approval-pagination { display: flex; align-items: center; gap: 4px; margin-top: 10px; color: var(--muted); font-size: calc(11px * var(--ui-scale)); }
+.task-approval-pagination > span { margin-right: auto; }
+.task-approval-pagination .icon-button { width: 30px; height: 30px; flex-shrink: 0; }
+.previous-approval svg { transform: rotate(180deg); }
+.context-tabs .icon-button { position: relative; }
+.approval-tab-dot { position: absolute; top: 6px; right: 20%; width: 5px; height: 5px; border-radius: 50%; background: var(--attention); }
+.task-approval-record[data-outcome='pending'] { border: 1px solid var(--border-strong); }
+.task-approval-record[data-outcome='pending'] .approval-meta { color: var(--attention); }
+.task-approval-record[data-outcome='allowed-once'] .approval-meta, .task-approval-record[data-outcome='allowed-task'] .approval-meta { color: var(--success); }
+.approval-activity-summary { display: flex; align-items: flex-start; gap: 9px; padding: 12px; margin-bottom: 10px; border-radius: 14px; background: var(--surface-raised); border: 1px solid var(--border); font-size: calc(12px * var(--ui-scale)); }
+.approval-activity-summary > svg { flex-shrink: 0; color: var(--attention); margin-top: 2px; }
+.approval-activity-summary > div { flex: 1; min-width: 0; }
+.approval-activity-summary p { margin: 4px 0 0; color: var(--muted); overflow-wrap: anywhere; }
+.approval-activity-summary .button { font-size: calc(11px * var(--ui-scale)); padding: 0; min-height: 24px; }
+.video-thumb img { width: 100%; height: 100%; object-fit: contain; }
+@container conversation (max-width: 520px) {
+  .task-approval-card { padding: 12px; border-radius: 16px; }
+  .task-approval-heading { gap: 6px; align-items: flex-start; }
+  .task-approval-heading > span { flex: 1; }
+  .task-approval-heading > span > svg { display: none; }
+  .task-approval-heading > .button { max-width: 74px; }
+  .task-approval-request { gap: 8px; }
+  .task-approval-icon { width: 28px; height: 28px; flex-basis: 28px; }
+  .task-approval-details { margin-left: 36px; }
+  .task-approval-actions > .button { min-height: 44px; padding-inline: 8px; }
+  .task-approval-pagination > span { max-width: 70%; }
+}
+@media (hover: none) {
+  .reaction-menu .menu-popover { gap: 0; padding: 5px; }
+  .reaction-menu .menu-popover > .button { flex-basis: 32px; width: 32px; height: 40px; min-height: 40px; }
+  .reaction-menu .menu-popover > .more-reactions { height: 32px; min-height: 32px; }
+}
+@media (max-height: 550px) {
+  .task-approval-dock { max-height: 35dvh; }
+}
+
+.domain-approval-card .task-approval-actions { margin-top: 12px; }
+/* Match the compact, rounded history cards in the supplied reference. */
+.approvals-panel .approval-record { margin: 0 0 8px; padding: 10px 11px; border: 1px solid transparent; border-radius: 12px; background: var(--surface-raised); }
+.approvals-panel .task-approval-record[data-outcome='pending'] { border-color: var(--border-strong); }
+.approvals-panel .approval-record > summary { gap: 9px; }
+.approvals-panel .approval-record > summary:hover { background: transparent; }
+.approvals-panel .approval-copy strong { font-size: calc(13px * var(--ui-scale)); line-height: 1.4; }
+.approvals-panel .approval-description { font-size: calc(13px * var(--ui-scale)); line-height: 1.45; overflow-wrap: anywhere; }
+.approvals-panel .approval-meta { font-size: calc(11px * var(--ui-scale)); line-height: 1.5; }
+.approvals-panel .approval-report { margin: 10px 0 0; padding: 10px; }
+.approvals-panel .approval-report .button { white-space: normal; font-size: calc(12px * var(--ui-scale)); }

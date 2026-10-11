@@ -1,0 +1,102 @@
+[
+  {
+    "exists": false,
+    "path": "/etc/crontab"
+  },
+  {
+    "exists": false,
+    "path": "/etc/cron.d"
+  },
+  {
+    "exists": false,
+    "path": "/etc/cron.daily"
+  },
+  {
+    "exists": false,
+    "path": "/etc/cron.hourly"
+  },
+  {
+    "exists": false,
+    "path": "/var/spool/cron"
+  },
+  {
+    "exists": false,
+    "path": "/var/spool/cron/crontabs"
+  },
+  {
+    "exists": false,
+    "path": "/usr/lib/systemd"
+  },
+  {
+    "exists": false,
+    "path": "/etc/systemd"
+  },
+  {
+    "exists": false,
+    "path": "/run/systemd"
+  },
+  {
+    "exists": false,
+    "path": "/lib/systemd"
+  },
+  {
+    "exists": false,
+    "path": "/root/.config/systemd"
+  },
+  {
+    "exists": false,
+    "path": "/home"
+  },
+  {
+    "exists": false,
+    "path": "/root"
+  },
+  {
+    "exists": false,
+    "path": "/bin"
+  },
+  {
+    "exists": false,
+    "path": "/usr/bin"
+  },
+  {
+    "exists": false,
+    "path": "/sbin"
+  },
+  {
+    "exists": false,
+    "path": "/usr/sbin"
+  },
+  {
+    "exists": false,
+    "path": "/usr/local/bin"
+  },
+  {
+    "exists": false,
+    "path": "/tmp"
+  },
+  {
+    "exists": false,
+    "path": "/var/tmp"
+  },
+  {
+    "exists": false,
+    "path": "/dev"
+  },
+  {
+    "exists": false,
+    "path": "/proc"
+  },
+  {
+    "exists": false,
+    "path": "/sys"
+  },
+  {
+    "exists": false,
+    "path": "/etc"
+  },
+  {
+    "exists": false,
+    "path": "/var"
+  }
+]
