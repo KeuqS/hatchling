@@ -100,6 +100,8 @@ use hatchling_vault::MasterKey;
 /// `128 + SIGSYS`: what [`spawn_cell`]'s reaper reports when the
 /// seccomp filter kills the probe (`SECCOMP_RET_KILL_PROCESS`).
 const SIGSYS_EXIT_CODE: i32 = 128 + 31;
+/// A process killed by `SIGILL`, in the same encoding.
+const SIGILL_EXIT_CODE: i32 = 128 + 4;
 
 /// How long the driver waits for one probe cell. Every probe exits in
 /// milliseconds (the slowest, the peer decoy, reads for at most 5 s);
@@ -313,6 +315,67 @@ fn assert_sigsys(result: &AttackResult) -> Result<(), String> {
     Ok(())
 }
 
+/// [`assert_sigsys`] for a catalog entry, with the one syscall the kernel
+/// exempts from seccomp.
+///
+/// `uretprobe` (Linux 6.11+) exists for the kernel's own uretprobe
+/// trampolines, and newer kernels pass it through seccomp unfiltered so that
+/// probes work in sandboxed processes. Called from anywhere but a trampoline,
+/// the kernel kills the caller with `SIGILL`. So on such a kernel the probe
+/// dies of `SIGILL` instead of `SIGSYS`: still dead on the attack itself (the
+/// `READY` marker and nothing after it), with nothing gained. Older kernels
+/// filter it like any other number, and the probe dies of `SIGSYS`.
+fn assert_denied_kills(name: &str, result: &AttackResult) -> Result<(), String> {
+    if name == "uretprobe" && result.exit_code == SIGILL_EXIT_CODE {
+        let expected_marker = format!("READY {}\n", result.slug);
+        let stdout = String::from_utf8_lossy(&result.stdout);
+        if stdout.as_ref() == expected_marker {
+            return Ok(());
+        }
+        return Err(format!(
+            "{}: SIGILL but stdout was {stdout:?}, expected exactly {expected_marker:?}",
+            result.slug
+        ));
+    }
+    assert_sigsys(result)
+}
+
+/// The `uretprobe` exception is exact: `SIGILL` passes for `uretprobe` alone,
+/// and only with the bare `READY` marker; any other syscall still needs
+/// `SIGSYS`, and a probe that reported after the call fails. Needs no cell.
+fn only_uretprobe_may_die_of_sigill() -> Result<(), String> {
+    let result = |slug: &str, exit_code: i32, stdout: &str| AttackResult {
+        slug: slug.to_owned(),
+        exit_code,
+        stdout: stdout.as_bytes().to_vec(),
+    };
+    assert_denied_kills(
+        "uretprobe",
+        &result("seccomp-335", SIGILL_EXIT_CODE, "READY seccomp-335\n"),
+    )?;
+    let other = result("seccomp-425", SIGILL_EXIT_CODE, "READY seccomp-425\n");
+    if assert_denied_kills("io_uring_setup", &other).is_ok() {
+        return Err(String::from(
+            "SIGILL must not pass for any syscall but uretprobe",
+        ));
+    }
+    let reported = result(
+        "seccomp-335",
+        SIGILL_EXIT_CODE,
+        "READY seccomp-335\nSURVIVED\n",
+    );
+    if assert_denied_kills("uretprobe", &reported).is_ok() {
+        return Err(String::from(
+            "a probe that reported after uretprobe must fail",
+        ));
+    }
+    assert_denied_kills(
+        "uretprobe",
+        &result("seccomp-335", SIGSYS_EXIT_CODE, "READY seccomp-335\n"),
+    )
+    .map_err(|e| format!("SIGSYS must still pass for uretprobe where it is filtered: {e}"))
+}
+
 /// Compare the observed outcome against the committed living
 /// inventory, or regenerate it under `HATCHLING_ADVERSARIAL_REGEN=1`.
 ///
@@ -343,7 +406,101 @@ fn check_or_regen(attack: &str, actual: &serde_json::Value) -> Result<(), String
     })?;
     let expected: serde_json::Value = serde_json::from_str(&expected_json)
         .map_err(|e| format!("parse committed inventory {}: {e}", path.display()))?;
+    if attack == "mount-escape" || attack == "setuid-scan" {
+        return check_inventory(
+            attack,
+            &fold_merged_usr(actual),
+            &fold_merged_usr(&expected),
+        );
+    }
     check_inventory(attack, actual, &expected)
+}
+
+/// A path inventory (mount-escape, setuid-scan) with merged-`/usr` spellings
+/// folded together.
+///
+/// A cell's library view is what the host's `ldd` reports, and merged-`/usr`
+/// hosts spell the same file two ways: Ubuntu 24.04 says
+/// `/lib/x86_64-linux-gnu/libc.so.6`, 26.04 `/usr/lib/x86_64-linux-gnu/libc.so.6`.
+/// So one host's cell has `/lib` and no `/usr`, and the other's the reverse.
+/// Which root the cell shows is the host's choice, not the boundary's: a path
+/// under `/usr/lib/`, or a probe directly in `/usr`, is read as its `/lib`
+/// spelling, and the entries are compared as a sorted multiset. Each entry
+/// is still checked on its own, unfolded (a write refused, no setuid bit).
+fn fold_merged_usr(writes: &serde_json::Value) -> serde_json::Value {
+    let mut folded: Vec<serde_json::Value> = writes
+        .as_array()
+        .map(|all| {
+            all.iter()
+                .map(|write| {
+                    let lib = write
+                        .get("path")
+                        .and_then(serde_json::Value::as_str)
+                        .and_then(|path| {
+                            path.strip_prefix("/usr/lib/")
+                                .or_else(|| {
+                                    path.strip_prefix("/usr/")
+                                        .filter(|rest| !rest.contains('/'))
+                                })
+                                .map(|rest| format!("/lib/{rest}"))
+                        });
+                    let mut write = write.clone();
+                    if let (Some(lib), Some(object)) = (lib, write.as_object_mut()) {
+                        object.insert(String::from("path"), serde_json::Value::String(lib));
+                    }
+                    write
+                })
+                .collect()
+        })
+        .unwrap_or_default();
+    folded.sort_by_cached_key(ToString::to_string);
+    serde_json::Value::Array(folded)
+}
+
+/// The fold is exact: each committed inventory and the one an Ubuntu 24.04
+/// host produced for the same cell (`tests/inventory/<name>.lib-layout.json`,
+/// its `/lib` spellings) fold to the same document, and one changed outcome
+/// (a write that succeeds, a setuid bit) still shows. Needs no cell.
+fn inventories_fold_only_the_lib_spelling() -> Result<(), String> {
+    let dir = PathBuf::from(env!("CARGO_MANIFEST_DIR"))
+        .join("tests")
+        .join("inventory");
+    let read = |name: &str| -> Result<serde_json::Value, String> {
+        let text =
+            std::fs::read_to_string(dir.join(name)).map_err(|e| format!("read {name}: {e}"))?;
+        serde_json::from_str(&text).map_err(|e| format!("parse {name}: {e}"))
+    };
+    for (inventory, field, value) in [
+        ("mount-escape", "errno", serde_json::Value::from(0)),
+        ("setuid-scan", "setuid", serde_json::Value::from(true)),
+    ] {
+        let committed = read(&format!("{inventory}.json"))?;
+        let other_host = read(&format!("{inventory}.lib-layout.json"))?;
+        if committed == other_host {
+            return Err(format!(
+                "{inventory}: the two hosts' inventories should differ before folding"
+            ));
+        }
+        if fold_merged_usr(&committed) != fold_merged_usr(&other_host) {
+            return Err(format!(
+                "{inventory}: the same cell on another merged-/usr host must fold to the committed inventory"
+            ));
+        }
+        let mut changed = other_host;
+        if let Some(first) = changed
+            .as_array_mut()
+            .and_then(|all| all.first_mut())
+            .and_then(serde_json::Value::as_object_mut)
+        {
+            first.insert(String::from(field), value);
+        }
+        if fold_merged_usr(&committed) == fold_merged_usr(&changed) {
+            return Err(format!(
+                "{inventory}: a changed outcome must still change the folded inventory"
+            ));
+        }
+    }
+    Ok(())
 }
 
 /// Spawn one probe cell for a report attack against a bound-but-unserved
@@ -547,7 +704,7 @@ fn denied_syscalls_each_sigsys() -> Result<(), String> {
             let _listener =
                 bind_listener(&config).map_err(|e| format!("bind broker socket: {e}"))?;
             let result = spawn_attack(attack, &socket_dir, agent_uid)?;
-            assert_sigsys(&result)
+            assert_denied_kills(entry.name, &result)
         })();
         if let Err(e) = outcome {
             return Err(format!(
@@ -574,8 +731,8 @@ fn cli_denied_syscalls_each_sigsys() -> Result<(), String> {
         ));
     }
     for entry in &catalog {
-        let outcome =
-            spawn_cli_attack(Attack::Seccomp(entry.nr)).and_then(|result| assert_sigsys(&result));
+        let outcome = spawn_cli_attack(Attack::Seccomp(entry.nr))
+            .and_then(|result| assert_denied_kills(entry.name, &result));
         if let Err(e) = outcome {
             return Err(format!(
                 "CLI-denied syscall {} (nr {}) did not SIGSYS (stopping at the first survivor): {e}",
@@ -906,7 +1063,15 @@ const CHECKS: &[Check] = &[
         "mount_escape_all_writes_denied",
         mount_escape_all_writes_denied,
     ),
+    (
+        "inventories_fold_only_the_lib_spelling",
+        inventories_fold_only_the_lib_spelling,
+    ),
     ("denied_syscalls_each_sigsys", denied_syscalls_each_sigsys),
+    (
+        "only_uretprobe_may_die_of_sigill",
+        only_uretprobe_may_die_of_sigill,
+    ),
     (
         "cli_denied_syscalls_each_sigsys",
         cli_denied_syscalls_each_sigsys,

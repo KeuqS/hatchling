@@ -35,11 +35,16 @@ jobs:
     strategy:
       fail-fast: false
       matrix:
-        toolchain: [stable, 1.85.0]
+        toolchain: [1.98.1, 1.85.0]
+    # The pinned toolchain (rust-toolchain.toml) and the MSRV, never a floating
+    # `stable`: a newer compiler adds lints that `-D warnings` turns into errors
+    # nobody changed code for. Bump the pin and this together.
     # RUSTUP_TOOLCHAIN overrides rust-toolchain.toml, so the MSRV job really
-    # runs the gate at 1.85.0 instead of the pinned stable.
+    # runs the gate at 1.85.0.
     env:
       RUSTUP_TOOLCHAIN: ${{ matrix.toolchain }}
+      # The real-kernel cell tests must run here, never skip.
+      HATCHLING_REQUIRE_CELL: "1"
     steps:
       - name: Checkout
         uses: actions/checkout@v4
@@ -70,8 +75,47 @@ jobs:
         with:
           tool: cargo-mutants@27.1.0
 
+      # Ubuntu runners restrict unprivileged user namespaces through
+      # AppArmor: unshare succeeds but grants no capabilities, so every cell
+      # test would skip. Lift the restriction for this job.
+      - name: Allow unprivileged user namespaces
+        run: sudo sysctl -w kernel.apparmor_restrict_unprivileged_userns=0
+
+      # A seccomp kill is SIGSYS, which dumps core, and Ubuntu pipes every core
+      # dump to apport. The denied-syscall catalogs kill hundreds of probes in
+      # minutes; the apport processes that spawned exhausted the runner's memory
+      # (OOM, swap, 30 s stalls). Write core files instead, to an absolute path
+      # (the kernel requires one with fs.suid_dumpable=2): the core size limit
+      # is 0, and a cell's root is read-only, so nothing is written.
+      - name: Don't hand core dumps to apport
+        run: |
+          echo "core size limit: $(ulimit -c)"
+          sudo sysctl -w kernel.core_pattern=/var/tmp/core
+
+      # A sample every 5 s while the gate runs, to show what the runner is
+      # doing if a probe cell or `ldd` stalls (blocked tasks, I/O wait, steal).
+      - name: Start a runner sampler
+        run: nohup vmstat -t -w 5 > "$RUNNER_TEMP/vmstat.log" 2>&1 &
+
       - name: Run gate
         run: bash scripts/check.sh
+
+      # The denied-syscall catalogs kill hundreds of probes in minutes, and
+      # each seccomp kill is audited. Report how many audit records this job
+      # produced and whether the kernel's audit backlog overflowed, which
+      # stalls any process that audits.
+      - name: Kernel audit report
+        if: always()
+        run: |
+          echo "seccomp audit records: $(sudo dmesg | grep -c 'type=1326' || true)"
+          echo "backlog or rate-limit lines: $(sudo dmesg | grep -cE 'backlog limit exceeded|audit: rate limit|audit_lost' || true)"
+          sudo dmesg | grep -E 'backlog limit exceeded|audit: rate limit|audit_lost' | tail -5 || true
+          echo "seccomp actions logged: $(cat /proc/sys/kernel/seccomp/actions_logged)"
+          systemctl is-active auditd systemd-journald 2>/dev/null || true
+          echo 'vmstat samples with blocked tasks, I/O wait over 10% or steal over 10%:'
+          awk 'NR <= 2 || $2 > 0 || $16 > 10 || $17 > 10' "$RUNNER_TEMP/vmstat.log" | head -60 || true
+          echo 'kernel log tail:'
+          sudo dmesg -T | tail -40 || true
 
   protocol:
  # the frontend/backend contract has one source, hatchling-core's
@@ -86,7 +130,7 @@ jobs:
       - name: Install Rust
         uses: dtolnay/rust-toolchain@master
         with:
-          toolchain: stable
+          toolchain: 1.98.1
 
       - name: Install Node
         uses: actions/setup-node@v4
